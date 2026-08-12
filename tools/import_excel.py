@@ -45,10 +45,15 @@ except ImportError:
 EPOCH = datetime.date(1899, 12, 30)
 WEEK = '一二三四五六日'
 
+# 旧档的 1 / 0 是「这堂算不算钱」,不是「有没有出现」:
+#   1 = 算钱     → 出席
+#   0 = 不算钱   → 请假(免扣)(老师通融的那几堂)
+# 少数人的旧档 0 是「缺席但照算」,那种用 --zero-charged 切换。
 STATUS_PRESENT = '出席'
-STATUS_ABSENT = '缺席(照算)'
+STATUS_ABSENT_FREE = '请假(免扣)'
+STATUS_ABSENT_CHARGED = '缺席(照算)'
 YES, NO = '是', '否'
-CHARGEABLE = {STATUS_PRESENT: YES, STATUS_ABSENT: YES}
+CHARGEABLE = {STATUS_PRESENT: YES, STATUS_ABSENT_CHARGED: YES, STATUS_ABSENT_FREE: NO}
 
 # 视为「没有底色」的值
 BLANK_FILLS = {'None', '00000000', 'FFFFFFFF', 'FFFFFF'}
@@ -141,11 +146,12 @@ def find_blocks(ws):
             if row[0].value is None and any(c.value is not None for c in row[1:])]
 
 
-def read_sheet(ws_val, ws_fmt, swap_fix, paid_fill, report):
+def read_sheet(ws_val, ws_fmt, swap_fix, paid_fill, zero_charged, report):
     """
     回传 (records, weekdays, bad_dates)
     records = {学生姓名: [(date, 出席状态, 是否已缴), ...]},保留原表的学生顺序
     """
+    zero_status = STATUS_ABSENT_CHARGED if zero_charged else STATUS_ABSENT_FREE
     records = OrderedDict()
     weekdays = Counter()
     bad_dates = []
@@ -180,7 +186,10 @@ def read_sheet(ws_val, ws_fmt, swap_fix, paid_fill, report):
                     report.append('  ⚠️ %s!%s 看不懂的出席值「%s」,已跳过'
                                   % (ws_val.title, ws_val.cell(r, col).coordinate, v))
                     continue
-                records[name].append((d, STATUS_PRESENT if n else STATUS_ABSENT, paid))
+                status = STATUS_PRESENT if n else zero_status
+                # 只有「算钱」的那几堂才算进已缴 —— 老师涂色时会把整段涂满,
+                # 包含中间不算钱的 0,那些不该被当成缴过的堂数。
+                records[name].append((d, status, paid and CHARGEABLE[status] == YES))
             r += 1
 
     return records, weekdays, bad_dates
@@ -219,6 +228,8 @@ def main():
                     help='不要修正日月对调(只在你确定旧档日期是对的时候用)')
     ap.add_argument('--paid-fill', default='auto',
                     help='「已缴费」的底色 RGB(例如 FFFF00);auto=自动侦测;none=不读底色')
+    ap.add_argument('--zero-charged', action='store_true',
+                    help='旧档的 0 是「缺席但照算」而不是「不算钱」时加这个')
     ap.add_argument('--fee', type=float, default=50, help='每期收费,预设 50')
     ap.add_argument('--package', type=int, default=4, help='每期堂数,预设 4')
     ap.add_argument('--class-fee', action='append', default=[], type=parse_class_fee,
@@ -254,6 +265,8 @@ def main():
               '产生时间:%s' % datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
               '日月对调修正:%s' % ('开启' if swap_fix else '关闭'),
               '已缴费底色:%s' % fill_note,
+              '1 / 0 的解读:1 = 算钱(出席)、0 = %s'
+              % ('缺席(照算)' if args.zero_charged else '不算钱 → 请假(免扣)'),
               '历史记录:%s' % ('一起汇入' if args.history == 'all' else '不汇入'),
               '']
 
@@ -274,7 +287,8 @@ def main():
     for ws_val in wb_val.worksheets:
         klass = ws_val.title.strip()
         ws_fmt = wb_fmt[ws_val.title]
-        records, weekdays, bad_dates = read_sheet(ws_val, ws_fmt, swap_fix, paid_fill, report)
+        records, weekdays, bad_dates = read_sheet(ws_val, ws_fmt, swap_fix, paid_fill,
+                                                  args.zero_charged, report)
         if not records:
             report.append('【%s】没有资料,跳过' % klass)
             continue
@@ -305,7 +319,9 @@ def main():
             charged = sum(1 for _, st, _ in entries if CHARGEABLE.get(st) == YES)
             paid_count = sum(1 for _, _, paid in entries if paid)
             balance = paid_count - charged
-            balances.append((klass, name, paid_count, charged, balance))
+            # 缴费应该一期一期缴,已缴堂数不是配套的整数倍就值得看一眼
+            odd = bool(lessons) and paid_count % lessons != 0
+            balances.append((klass, name, paid_count, charged, balance, odd, lessons))
 
             students.append([student_id, name, klass, '', '',
                              fmt_money(per_lesson), lessons, '在读',
@@ -343,16 +359,31 @@ def main():
                '=' * 62,
                '%-10s %-12s %5s %5s %6s  %s' % ('班级', '学生', '已缴', '已上', '余额', '状态')]
     owed = 0
-    for klass, name, paid_count, charged, balance in sorted(balances, key=lambda x: (x[0], x[4])):
+    odd_ones = []
+    for klass, name, paid_count, charged, balance, odd, lessons in sorted(
+            balances, key=lambda x: (x[0], x[4])):
         tag = ('🔴 欠 %d 堂' % -balance if balance < 0 else
                '🟢 刚好结清' if balance == 0 else '🟡 预缴 %d 堂' % balance)
+        if odd:
+            tag += '  ⚠️'
+            odd_ones.append((klass, name, paid_count, lessons))
         report.append('%-10s %-12s %5d %5d %6d  %s'
                       % (klass, name, paid_count, charged, balance, tag))
         if balance < 0:
             owed += -balance
     report += ['=' * 62,
-               '合计欠 %d 堂' % owed,
-               '',
+               '合计欠 %d 堂' % owed]
+
+    if odd_ones:
+        report += ['',
+                   '⚠️ 这几位的「已缴」不是配套堂数的整数倍 —— 缴费通常是一期一期缴,',
+                   '   请特别核对这几个人的底色范围有没有涂错:']
+        for klass, name, paid_count, lessons in odd_ones:
+            report.append('     %-10s %-12s 已缴 %d 堂(配套 %d 堂,差 %d 堂到整期)'
+                          % (klass, name, paid_count, lessons,
+                             lessons - paid_count % lessons))
+
+    report += ['',
                '学生      %d 位' % len(students),
                '课程记录  %d 笔' % len(sessions),
                '付款记录  %d 笔' % len(payments),
@@ -360,9 +391,8 @@ def main():
                '⚠️ 上面的「已缴」完全来自旧档的底色。汇入前请先看一眼这张表,',
                '   数字跟你印象中差太多的话,先确认底色的意思有没有被我猜错。',
                '',
-               '⚠️ 旧档只有 1/0,分不出「缺席」和「请假」,一律当成',
-               '   「缺席(照算)」。要改的话,汇入后到「课程记录」改那几格,',
-               '   余额会自动重算。',
+               '⚠️ 旧档的 0 当成「请假(免扣)」—— 也就是不扣堂数。',
+               '   如果你的 0 其实是「缺席但照算」,重跑一次并加上 --zero-charged。',
                '',
                '下一步:把每个 CSV 汇入对应的工作表(档案 → 汇入 → 在指定储存格取代资料 → A1),',
                '        然后执行 📚 补习管理 → 🔄 刷新总览。',
