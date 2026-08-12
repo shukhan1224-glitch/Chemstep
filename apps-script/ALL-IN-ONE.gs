@@ -344,8 +344,26 @@ function setupStudentsSheet_(ss) {
 
   sh.getRange(2, colIdx_(sh, 'WhatsApp号码'), rows, 1).setNumberFormat('@'); // 保留开头的 0
   sh.getRange(2, colIdx_(sh, '每堂收费RM'), rows, 1).setNumberFormat('0.00');
-  sh.setColumnWidth(colIdx_(sh, '备注'), 240);
+  setWidths_(sh, {
+    '学生ID': 70, '姓名': 110, '班级': 100, '家长称呼': 110,
+    'WhatsApp号码': 130, '每堂收费RM': 100, '配套堂数': 80, '状态': 70, '备注': 260
+  });
+
+  // 还没填 WhatsApp 号码的标黄 —— 没有号码就发不出催费讯息
+  const phone = sh.getRange(2, colIdx_(sh, 'WhatsApp号码'), rows, 1);
+  sh.setConditionalFormatRules([
+    SpreadsheetApp.newConditionalFormatRule()
+      .whenCellEmpty().setBackground('#fff8e1')
+      .setRanges([phone]).build()
+  ]);
   return sh;
+}
+
+/** 依栏位名称设定栏宽 */
+function setWidths_(sh, widths) {
+  Object.keys(widths).forEach(function (name) {
+    sh.setColumnWidth(colIdx_(sh, name), widths[name]);
+  });
 }
 
 function setupSessionsSheet_(ss) {
@@ -432,8 +450,11 @@ function refreshClassDropdown_() {
 
 function setupDashboardSheet_(ss) {
   const sh = setupPlainSheet_(ss, SHEETS.DASHBOARD, HEADERS.DASHBOARD);
-  sh.setColumnWidth(colIdx_(sh, '提醒状态'), 110);
-  sh.setColumnWidth(colIdx_(sh, '发送催费'), 130);
+  setWidths_(sh, {
+    '学生ID': 70, '姓名': 110, '班级': 100, '状态': 60,
+    '已付堂数': 70, '已扣堂数': 70, '余额': 60, '上次上课': 100,
+    '提醒状态': 110, '发送催费': 130, '已发送': 70, '上次催费': 130
+  });
   sh.getRange(2, colIdx_(sh, '上次上课'), Math.max(sh.getMaxRows() - 1, 1), 1)
     .setNumberFormat('yyyy-mm-dd');
   sh.getRange(2, colIdx_(sh, '上次催费'), Math.max(sh.getMaxRows() - 1, 1), 1)
