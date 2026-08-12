@@ -149,12 +149,23 @@ def find_blocks(ws):
 def read_sheet(ws_val, ws_fmt, swap_fix, paid_fill, zero_charged, report):
     """
     回传 (records, weekdays, bad_dates)
-    records = {学生姓名: [(date, 出席状态, 是否已缴), ...]},保留原表的学生顺序
+    records = {学生姓名: {'entries': [(date, 出席状态, 是否已缴)], 'prepaid': int}}
+    保留原表的学生顺序。
+
+    「已缴」怎么数(依老师实际的涂色习惯):
+      • 涂色且值是 1        → 缴过的一堂
+      • 涂色但值是 0        → 那堂本来就不收钱,不算
+      • 涂色但整格空白      → 预缴(还没上的课先收了钱),但只有出现在
+                             「最后一个涂色的 1」之后才算 —— 排在前面的
+                             表示那笔预缴已经被后面真正上的课用掉了,
+                             只是旧记号还留着。
     """
     zero_status = STATUS_ABSENT_CHARGED if zero_charged else STATUS_ABSENT_FREE
     records = OrderedDict()
     weekdays = Counter()
     bad_dates = []
+    # streams[name] = 依「区块顺序 → 栏位顺序」摊平的格子,也就是老师涂色的顺序
+    streams = OrderedDict()
 
     for block_row in find_blocks(ws_val):
         header = {}
@@ -171,26 +182,49 @@ def read_sheet(ws_val, ws_fmt, swap_fix, paid_fill, zero_charged, report):
         r = block_row + 1
         while r <= ws_val.max_row and ws_val.cell(r, 1).value is not None:
             name = str(ws_val.cell(r, 1).value).strip()
-            records.setdefault(name, [])
-            for col, d in header.items():
-                v = ws_val.cell(r, col).value
-                paid = paid_fill is not None and fill_rgb(ws_fmt.cell(r, col)) == paid_fill
-                if v is None or str(v).strip() == '':
-                    if paid:
-                        report.append('  ⚠️ %s!%s 有底色但没有出席记录,已忽略'
-                                      % (ws_val.title, ws_val.cell(r, col).coordinate))
-                    continue          # 空白 = 当时还没入学 / 已退出,不是缺席
+            records.setdefault(name, {'entries': [], 'prepaid': 0})
+            stream = streams.setdefault(name, [])
+
+            for col in range(2, ws_val.max_column + 1):
+                cell = ws_val.cell(r, col)
+                v = cell.value
+                filled = paid_fill is not None and fill_rgb(ws_fmt.cell(r, col)) == paid_fill
+                blank = v is None or str(v).strip() == ''
+                d = header.get(col)
+
+                if blank:
+                    # 没日期的栏 + 涂色 = 预缴;有日期的栏空白 = 还没入学/已退出
+                    if filled:
+                        if d is None:
+                            stream.append(('prepaid', None))
+                        else:
+                            report.append('  ⚠️ %s!%s 有日期又有底色但没填 1/0,已忽略'
+                                          % (ws_val.title, cell.coordinate))
+                    continue
+
+                if d is None:
+                    report.append('  ⚠️ %s!%s 有值「%s」但那一栏没有日期,已跳过'
+                                  % (ws_val.title, cell.coordinate, v))
+                    continue
                 try:
                     n = int(float(v))
                 except (TypeError, ValueError):
                     report.append('  ⚠️ %s!%s 看不懂的出席值「%s」,已跳过'
-                                  % (ws_val.title, ws_val.cell(r, col).coordinate, v))
+                                  % (ws_val.title, cell.coordinate, v))
                     continue
+
                 status = STATUS_PRESENT if n else zero_status
-                # 只有「算钱」的那几堂才算进已缴 —— 老师涂色时会把整段涂满,
-                # 包含中间不算钱的 0,那些不该被当成缴过的堂数。
-                records[name].append((d, status, paid and CHARGEABLE[status] == YES))
+                counts = filled and CHARGEABLE[status] == YES
+                records[name]['entries'].append((d, status, counts))
+                stream.append(('paid1' if counts else 'other', None))
             r += 1
+
+    # 只採计排在「最后一个涂色的 1」之后的预缴记号
+    for name, stream in streams.items():
+        last_paid = max((i for i, (kind, _) in enumerate(stream) if kind == 'paid1'),
+                        default=-1)
+        records[name]['prepaid'] = sum(
+            1 for i, (kind, _) in enumerate(stream) if kind == 'prepaid' and i > last_paid)
 
     return records, weekdays, bad_dates
 
@@ -320,7 +354,8 @@ def main():
         for b in bad_dates:
             report.append('    ⚠️ %s' % b)
 
-        for name, entries in records.items():
+        for name, rec in records.items():
+            entries, prepaid = rec['entries'], rec['prepaid']
             sid += 1
             student_id = 'S%03d' % sid
             if name in seen_names:
@@ -330,7 +365,10 @@ def main():
 
             entries_by_date = sorted(entries, key=lambda x: x[0])
             charged = sum(1 for _, st, _ in entries if CHARGEABLE.get(st) == YES)
-            paid_count = sum(1 for _, _, paid in entries if paid)
+            paid_count = sum(1 for _, _, paid in entries if paid) + prepaid
+            if prepaid:
+                report.append('    💰 %s 有 %d 堂预缴(涂了色但还没上的课)'
+                              % (name, prepaid))
 
             if name in overrides:
                 report.append('    ✏️ %s 的已缴堂数由 %d 手动改为 %d'
@@ -363,12 +401,20 @@ def main():
                                      student_id, name, st, CHARGEABLE.get(st, NO),
                                      '旧 Excel 汇入', '', ''])
 
-            if paid_count:
+            if paid_count > 0:
                 pid += 1
-                first_paid = min(d for d, _, p in entries if p)
-                payments.append(['P%04d' % pid, first_paid.isoformat(), student_id, name,
+                # 付款日期取第一堂缴过的课;没有的话(纯预缴或手动指定)退回第一堂课
+                paid_dates = [d for d, _, p in entries if p]
+                when = (min(paid_dates) if paid_dates
+                        else min(d for d, _, _ in entries) if entries else today)
+                note = '旧 Excel 已涂色的 %d 堂' % (paid_count - prepaid)
+                if prepaid:
+                    note += ' + 预缴 %d 堂' % prepaid
+                if name in overrides:
+                    note = '旧 Excel 结转,已缴堂数由人工确认为 %d 堂' % paid_count
+                payments.append(['P%04d' % pid, when.isoformat(), student_id, name,
                                  fmt_money(per_lesson * paid_count), paid_count, '旧档结转',
-                                 '旧 Excel 已涂色的 %d 堂,合并成一笔' % paid_count, ''])
+                                 note + ',合并成一笔', ''])
 
     def write_csv(fname, headers, rows):
         with open(os.path.join(args.out, fname), 'w', newline='', encoding='utf-8-sig') as f:

@@ -106,9 +106,10 @@ check('日期全部还原到星期四', dict(weekdays), {'四': 4})
 check('没有解析不了的日期', bad, [])
 
 
-def tally(name):
-    used = sum(1 for _, st, _ in records[name] if CHARGEABLE.get(st) == YES)
-    paid = sum(1 for _, _, p in records[name] if p)
+def tally(name, recs=None):
+    r = (recs or records)[name]
+    used = sum(1 for _, st, _ in r['entries'] if CHARGEABLE.get(st) == YES)
+    paid = sum(1 for _, _, p in r['entries'] if p) + r['prepaid']
     return used, paid
 
 
@@ -116,11 +117,51 @@ check('甲 已上/已缴', tally('甲'), (4, 3))
 check('乙 已上/已缴(0 不算钱、也不算已缴)', tally('乙'), (3, 3))
 check('丙 已上/已缴(空白不产生记录)', tally('丙'), (2, 0))
 check('乙 的 0 被记成请假(免扣)',
-      sorted({st for _, st, _ in records['乙']}), ['出席', '请假(免扣)'])
+      sorted({st for _, st, _ in records['乙']['entries']}), ['出席', '请假(免扣)'])
 
 records2, _, _ = read_sheet(ws, ws, True, 'FFFFFF00', True, [])   # --zero-charged
-used2 = sum(1 for _, st, _ in records2['乙'] if CHARGEABLE.get(st) == YES)
+used2 = sum(1 for _, st, _ in records2['乙']['entries'] if CHARGEABLE.get(st) == YES)
 check('--zero-charged 时乙的 0 改为照算', used2, 4)
+
+
+# ── 预缴:涂了色但还没写 1 ────────────────────────────────────────
+print('\n── 预缴(涂色但空白)──')
+wb2 = openpyxl.Workbook()
+w2 = wb2.active
+w2.title = '预缴班'
+
+# 区块 1:B..D 有日期,E 没日期(还没上的课)
+w2['B1'], w2['C1'], w2['D1'] = '15/1/2026', '22/1/2026', '29/1/2026'
+# 区块 2(第 5 列起):B..C 有日期
+w2['B5'], w2['C5'] = '5/2/2026', '12/2/2026'
+
+# 丁:区块1 三堂全涂,E2 是预缴记号,后面没有再涂 → 已缴 3+1=4
+# 戊:区块1 三堂全涂,E3 预缴记号,但区块2 B7 又写了 1 且涂色
+#     → 那笔预缴已经被 B7 用掉,记号不算 → 已缴 4(不是 5)
+# 己:区块1 三堂全涂,E4 预缴记号,区块2 B8 是 0 且涂色
+#     → 0 不消耗预缴 → 已缴 3+1=4
+for row, name in ((2, '丁'), (3, '戊'), (4, '己')):
+    w2.cell(row, 1).value = name
+    for col in 'BCD':
+        c = w2['%s%d' % (col, row)]
+        c.value, c.fill = 1, YELLOW
+    w2['E%d' % row].fill = YELLOW          # 预缴记号(没有值)
+
+for row, name in ((6, '丁'), (7, '戊'), (8, '己')):
+    w2.cell(row, 1).value = name
+w2['B7'].value, w2['B7'].fill = 1, YELLOW  # 戊:预缴被真正上的课用掉
+w2['C7'].value = 1
+w2['B8'].value, w2['B8'].fill = 0, YELLOW  # 己:0 不消耗预缴
+w2['C8'].value = 1
+w2['B6'].value = 1                          # 丁:后面没再涂色
+
+r2, _, _ = read_sheet(w2, w2, True, 'FFFFFF00', False, [])
+check('丁 预缴记号在最后 → 算 1 堂', r2['丁']['prepaid'], 1)
+check('戊 预缴已被后面的 1 用掉 → 不算', r2['戊']['prepaid'], 0)
+check('己 后面只有 0,预缴仍有效 → 算 1 堂', r2['己']['prepaid'], 1)
+check('丁 已上/已缴', tally('丁', r2), (4, 4))
+check('戊 已上/已缴', tally('戊', r2), (5, 4))
+check('己 已上/已缴', tally('己', r2), (4, 4))
 
 print('\n%s%d 项通过\n' % ('❌ %d 项失败,' % failed if failed else '🎉 全数通过,', passed))
 sys.exit(1 if failed else 0)
