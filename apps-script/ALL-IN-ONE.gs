@@ -84,7 +84,7 @@ const HEADERS = {
     '学生ID', '姓名', '目前余额', '出席状态', '备注'
   ],
   DASHBOARD: [
-    '学生ID', '姓名', '班级', '状态', '已付堂数', '已扣堂数', '余额',
+    '学生ID', '姓名', '班级', '状态', '已付堂数', '已扣堂数', '余额', '欠款RM',
     '上次上课', '提醒状态', '发送催费', '已发送', '上次催费'
   ],
   REMINDER_LOG: ['时间', '学生ID', '学生姓名', '当时余额', '讯息内容'],
@@ -452,7 +452,7 @@ function setupDashboardSheet_(ss) {
   const sh = setupPlainSheet_(ss, SHEETS.DASHBOARD, HEADERS.DASHBOARD);
   setWidths_(sh, {
     '学生ID': 70, '姓名': 110, '班级': 100, '状态': 60,
-    '已付堂数': 70, '已扣堂数': 70, '余额': 60, '上次上课': 100,
+    '已付堂数': 70, '已扣堂数': 70, '余额': 60, '欠款RM': 90, '上次上课': 100,
     '提醒状态': 110, '发送催费': 130, '已发送': 70, '上次催费': 130
   });
   sh.getRange(2, colIdx_(sh, '上次上课'), Math.max(sh.getMaxRows() - 1, 1), 1)
@@ -736,6 +736,9 @@ function refreshDashboard() {
   }
   if (!students.length) { toast_('还没有学生资料。'); return; }
 
+  let totalOwed = 0;
+  let dueCount = 0;
+
   const rows = students.map(function (s) {
     const id = s['学生ID'];
     const b = balances[id] || { paid: 0, charged: 0, balance: 0, lastSession: null };
@@ -743,9 +746,17 @@ function refreshDashboard() {
                 : b.balance <= warnThreshold ? '🟡 快用完'
                 : '🟢 正常';
     const link = b.balance <= warnThreshold ? buildWaFormula_(s, b, settings) : '';
+
+    // 欠款 = 欠的堂数 × 该学生的每堂收费(不同班收费不同)
+    const perLesson = Number(s['每堂收费RM']) ||
+                      settingNumber_(settings, '默认每堂收费RM', 50);
+    const owed = b.balance < 0 ? -b.balance * perLesson : 0;
+    totalOwed += owed;
+    if (b.balance <= dueThreshold) dueCount++;
+
     return [
       id, s['姓名'], s['班级'], s['状态'],
-      b.paid, b.charged, b.balance,
+      b.paid, b.charged, b.balance, owed || '',
       b.lastSession || '',
       state, link, false,
       lastReminder[id] || ''
@@ -759,18 +770,21 @@ function refreshDashboard() {
 
   sh.getRange(2, colIdx_(sh, '上次上课'), rows.length, 1).setNumberFormat('yyyy-mm-dd');
   sh.getRange(2, colIdx_(sh, '上次催费'), rows.length, 1).setNumberFormat('yyyy-mm-dd hh:mm');
+  sh.getRange(2, colIdx_(sh, '欠款RM'), rows.length, 1).setNumberFormat('#,##0.00');
 
   applyDashboardColors_(sh, rows.length);
   refreshClassDropdown_();
 
-  const dueCount = rows.filter(function (r) { return r[8].indexOf('该催费') > -1; }).length;
   toast_('总览已更新:' + rows.length + ' 位学生 · ' + getClasses_().length + ' 个班' +
-         (dueCount ? ' · 🔴 ' + dueCount + ' 位该催费' : ' · 🟢 无人需要催费'));
+         (dueCount
+           ? ' · 🔴 ' + dueCount + ' 位该催费,共欠 RM' + totalOwed.toFixed(2)
+           : ' · 🟢 无人需要催费'));
 }
 
 function applyDashboardColors_(sh, numRows) {
   const stateRange = sh.getRange(2, colIdx_(sh, '提醒状态'), numRows, 1);
   const balanceRange = sh.getRange(2, colIdx_(sh, '余额'), numRows, 1);
+  const owedRange = sh.getRange(2, colIdx_(sh, '欠款RM'), numRows, 1);
 
   sh.setConditionalFormatRules([
     SpreadsheetApp.newConditionalFormatRule()
@@ -784,7 +798,10 @@ function applyDashboardColors_(sh, numRows) {
       .setRanges([stateRange]).build(),
     SpreadsheetApp.newConditionalFormatRule()
       .whenNumberLessThanOrEqualTo(0).setFontColor('#b71c1c').setBold(true)
-      .setRanges([balanceRange]).build()
+      .setRanges([balanceRange]).build(),
+    SpreadsheetApp.newConditionalFormatRule()
+      .whenNumberGreaterThan(0).setFontColor('#b71c1c').setBold(true)
+      .setRanges([owedRange]).build()
   ]);
 }
 

@@ -214,7 +214,7 @@ function setupDashboardSheet_(ss) {
   const sh = setupPlainSheet_(ss, SHEETS.DASHBOARD, HEADERS.DASHBOARD);
   setWidths_(sh, {
     '学生ID': 70, '姓名': 110, '班级': 100, '状态': 60,
-    '已付堂数': 70, '已扣堂数': 70, '余额': 60, '上次上课': 100,
+    '已付堂数': 70, '已扣堂数': 70, '余额': 60, '欠款RM': 90, '上次上课': 100,
     '提醒状态': 110, '发送催费': 130, '已发送': 70, '上次催费': 130
   });
   sh.getRange(2, colIdx_(sh, '上次上课'), Math.max(sh.getMaxRows() - 1, 1), 1)
