@@ -58,9 +58,18 @@ function refreshDashboard() {
   const dueThreshold = settingNumber_(settings, '催费门槛(余额≤)', 0);
   const warnThreshold = settingNumber_(settings, '预告门槛(余额=)', 1);
 
-  const students = readTable_(SHEETS.STUDENTS).rows.filter(function (s) {
-    return s['学生ID'] !== '' && s['状态'] !== STUDENT_STATUS.ENDED;
-  });
+  // 依 班级 → 余额 排序:同班的排在一起,快没堂数的排最上面
+  const students = readTable_(SHEETS.STUDENTS).rows
+    .filter(function (s) {
+      return s['学生ID'] !== '' && s['状态'] !== STUDENT_STATUS.ENDED;
+    })
+    .sort(function (a, b) {
+      const ka = String(a['班级'] || ''), kb = String(b['班级'] || '');
+      if (ka !== kb) return ka < kb ? -1 : 1;
+      const ba = (balances[a['学生ID']] || {}).balance || 0;
+      const bb = (balances[b['学生ID']] || {}).balance || 0;
+      return ba - bb;
+    });
 
   // 清掉旧内容(含核取方块的验证规则)
   if (sh.getMaxRows() > 1) {
@@ -77,7 +86,7 @@ function refreshDashboard() {
                 : '🟢 正常';
     const link = b.balance <= warnThreshold ? buildWaFormula_(s, b, settings) : '';
     return [
-      id, s['姓名'], s['科目'], s['状态'],
+      id, s['姓名'], s['班级'], s['状态'],
       b.paid, b.charged, b.balance,
       b.lastSession || '',
       state, link, false,
@@ -94,7 +103,11 @@ function refreshDashboard() {
   sh.getRange(2, colIdx_(sh, '上次催费'), rows.length, 1).setNumberFormat('yyyy-mm-dd hh:mm');
 
   applyDashboardColors_(sh, rows.length);
-  toast_('总览已更新(' + rows.length + ' 位学生)。');
+  refreshClassDropdown_();
+
+  const dueCount = rows.filter(function (r) { return r[8].indexOf('该催费') > -1; }).length;
+  toast_('总览已更新:' + rows.length + ' 位学生 · ' + getClasses_().length + ' 个班' +
+         (dueCount ? ' · 🔴 ' + dueCount + ' 位该催费' : ' · 🟢 无人需要催费'));
 }
 
 function applyDashboardColors_(sh, numRows) {
@@ -130,6 +143,9 @@ function getStudentsNeedingReminder_() {
       return b && b.balance <= dueThreshold;
     })
     .map(function (s) {
-      return { id: s['学生ID'], name: s['姓名'], balance: balances[s['学生ID']].balance };
+      return {
+        id: s['学生ID'], name: s['姓名'], klass: s['班级'],
+        balance: balances[s['学生ID']].balance
+      };
     });
 }

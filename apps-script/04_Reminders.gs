@@ -69,6 +69,7 @@ function showReminderDrafts() {
       return {
         id: s['学生ID'],
         name: s['姓名'],
+        klass: s['班级'],
         balance: b.balance,
         urgent: b.balance <= dueThreshold,
         phone: phone,
@@ -76,7 +77,10 @@ function showReminderDrafts() {
         url: phone ? 'https://wa.me/' + phone + '?text=' + encodeURIComponent(text) : ''
       };
     })
-    .sort(function (a, b) { return a.balance - b.balance; });
+    .sort(function (a, b) {
+      if (a.balance !== b.balance) return a.balance - b.balance;  // 最急的排最前
+      return String(a.klass) < String(b.klass) ? -1 : 1;
+    });
 
   SpreadsheetApp.getUi().showModalDialog(
     HtmlService.createHtmlOutput(reminderDialogHtml_(items)).setWidth(520).setHeight(600),
@@ -98,7 +102,8 @@ function reminderDialogHtml_(items) {
       body +=
         '<div class="card ' + (it.urgent ? 'urgent' : 'warn') + '">' +
           '<div class="head">' +
-            '<span class="name">' + esc(it.name) + '</span>' +
+            '<span class="name">' + esc(it.name) +
+              (it.klass ? ' <span class="klass">' + esc(it.klass) + '</span>' : '') + '</span>' +
             '<span class="badge">余额 ' + it.balance + ' 堂</span>' +
           '</div>' +
           '<pre>' + esc(it.text) + '</pre>' +
@@ -119,6 +124,7 @@ function reminderDialogHtml_(items) {
     '.card.urgent{border-left-color:#e53935;}' +
     '.head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;}' +
     '.name{font-weight:700;font-size:15px;}' +
+    '.klass{font-weight:400;font-size:12px;color:#78909c;}' +
     '.badge{font-size:12px;background:#eceff1;border-radius:10px;padding:2px 9px;color:#546e7a;}' +
     'pre{white-space:pre-wrap;word-break:break-word;background:#f5f7f8;border-radius:6px;' +
       'padding:10px;font-size:13px;line-height:1.6;margin:0 0 10px;font-family:inherit;}' +

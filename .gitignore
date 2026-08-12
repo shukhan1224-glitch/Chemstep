@@ -1,0 +1,16 @@
+# 汇入/汇出的实际资料含学生姓名与家长联络方式,绝对不要进版本库
+out/
+*.csv
+*.xlsx
+!tests/fixtures/*.xlsx
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 编辑器
+.DS_Store
+.vscode/
+.idea/

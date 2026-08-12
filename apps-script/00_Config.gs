@@ -52,11 +52,11 @@ const NO = '否';
 /** 各表的栏位标题(顺序即栏序) */
 const HEADERS = {
   STUDENTS: [
-    '学生ID', '姓名', '家长称呼', 'WhatsApp号码', '科目',
-    '上课形式', '每堂收费RM', '配套堂数', '状态', '备注'
+    '学生ID', '姓名', '班级', '家长称呼', 'WhatsApp号码',
+    '每堂收费RM', '配套堂数', '状态', '备注'
   ],
   SESSIONS: [
-    '记录ID', '日期', '学生ID', '学生姓名', '科目',
+    '记录ID', '日期', '班级', '学生ID', '学生姓名',
     '出席状态', '是否扣堂', '备注', '记录时间', '最后修改'
   ],
   PAYMENTS: [
@@ -64,10 +64,10 @@ const HEADERS = {
     '购买堂数', '付款方式', '备注', '记录时间'
   ],
   ROLLCALL: [
-    '学生ID', '姓名', '科目', '目前余额', '出席状态', '备注'
+    '学生ID', '姓名', '目前余额', '出席状态', '备注'
   ],
   DASHBOARD: [
-    '学生ID', '姓名', '科目', '状态', '已付堂数', '已扣堂数', '余额',
+    '学生ID', '姓名', '班级', '状态', '已付堂数', '已扣堂数', '余额',
     '上次上课', '提醒状态', '发送催费', '已发送', '上次催费'
   ],
   REMINDER_LOG: ['时间', '学生ID', '学生姓名', '当时余额', '讯息内容'],
@@ -148,6 +148,16 @@ function getSettings_() {
     if (row[0] !== '') out[String(row[0]).trim()] = row[1];
   });
   return out;
+}
+
+/** 从「学生」表捞出所有班级名称(去重、排序),给点名的班级下拉用 */
+function getClasses_() {
+  const seen = {};
+  readTable_(SHEETS.STUDENTS).rows.forEach(function (s) {
+    const c = String(s['班级'] == null ? '' : s['班级']).trim();
+    if (c && s['状态'] !== STUDENT_STATUS.ENDED) seen[c] = true;
+  });
+  return Object.keys(seen).sort();
 }
 
 function settingNumber_(settings, key, fallback) {

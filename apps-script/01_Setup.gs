@@ -97,7 +97,6 @@ function setupStudentsSheet_(ss) {
 
   applyDropdown_(sh, colIdx_(sh, '状态'), rows,
     [STUDENT_STATUS.ACTIVE, STUDENT_STATUS.PAUSED, STUDENT_STATUS.ENDED]);
-  applyDropdown_(sh, colIdx_(sh, '上课形式'), rows, ['一对一', '小组']);
 
   sh.getRange(2, colIdx_(sh, 'WhatsApp号码'), rows, 1).setNumberFormat('@'); // 保留开头的 0
   sh.getRange(2, colIdx_(sh, '每堂收费RM'), rows, 1).setNumberFormat('0.00');
@@ -111,6 +110,7 @@ function setupSessionsSheet_(ss) {
 
   applyDropdown_(sh, colIdx_(sh, '出席状态'), rows, objValues_(ATTENDANCE_STATUS));
   applyDropdown_(sh, colIdx_(sh, '是否扣堂'), rows, [YES, NO]);
+  // 不设定对齐方式:真日期会自动靠右、被当成文字的会靠左,一眼看得出输入错误
   sh.getRange(2, colIdx_(sh, '日期'), rows, 1).setNumberFormat('yyyy-mm-dd');
   sh.getRange(2, colIdx_(sh, '记录时间'), rows, 1).setNumberFormat('yyyy-mm-dd hh:mm');
   sh.getRange(2, colIdx_(sh, '最后修改'), rows, 1).setNumberFormat('yyyy-mm-dd hh:mm');
@@ -142,11 +142,14 @@ function setupPaymentsSheet_(ss) {
 function setupRollcallSheet_(ss) {
   const sh = getOrCreateSheet_(ss, SHEETS.ROLLCALL);
 
-  // 第 1 列是上课日期,第 2 列才是标题
+  // 第 1 列是「上课日期 + 班级」选择区,第 2 列才是标题
   sh.getRange('A1').setValue('上课日期 →').setFontWeight('bold');
   sh.getRange('B1').setNumberFormat('yyyy-mm-dd').setBackground('#fff8e1')
     .setBorder(true, true, true, true, false, false);
-  sh.getRange('C1').setValue('← 改这里就能补录过去的课').setFontColor('#90a4ae');
+  sh.getRange('C1').setValue('班级 →').setFontWeight('bold').setHorizontalAlignment('right');
+  sh.getRange('D1').setBackground('#fff8e1')
+    .setBorder(true, true, true, true, false, false);
+  sh.getRange('E1').setValue('← 先选好这两格,再按「载入今日点名」').setFontColor('#90a4ae');
 
   sh.getRange(2, 1, 1, HEADERS.ROLLCALL.length).setValues([HEADERS.ROLLCALL])
     .setFontWeight('bold').setBackground('#37474f').setFontColor('#ffffff');
@@ -156,14 +159,31 @@ function setupRollcallSheet_(ss) {
   }
 
   const rows = Math.max(sh.getMaxRows() - 2, 1);
-  sh.getRange(3, 5, rows, 1).setDataValidation(
+  const cStatus = HEADERS.ROLLCALL.indexOf('出席状态') + 1;
+  sh.getRange(3, cStatus, rows, 1).setDataValidation(
     SpreadsheetApp.newDataValidation()
       .requireValueInList(objValues_(ATTENDANCE_STATUS), true)
       .setAllowInvalid(false).build()
   );
-  sh.setColumnWidth(5, 150);
-  sh.setColumnWidth(6, 240);
+  sh.setColumnWidth(cStatus, 150);
+  sh.setColumnWidth(cStatus + 1, 240);
+  refreshClassDropdown_();
   return sh;
+}
+
+/** 把「今日点名」D1 的班级下拉,依「学生」表现有的班级重建 */
+function refreshClassDropdown_() {
+  const sh = ss_().getSheetByName(SHEETS.ROLLCALL);
+  if (!sh) return;
+  const classes = getClasses_();
+  const cell = sh.getRange('D1');
+  if (!classes.length) { cell.clearDataValidations(); return; }
+  cell.setDataValidation(
+    SpreadsheetApp.newDataValidation()
+      .requireValueInList(classes, true)
+      .setAllowInvalid(false).build()
+  );
+  if (classes.indexOf(String(cell.getValue()).trim()) === -1) cell.clearContent();
 }
 
 function setupDashboardSheet_(ss) {

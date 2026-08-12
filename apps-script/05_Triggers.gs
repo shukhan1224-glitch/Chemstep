@@ -57,6 +57,9 @@ function handleStudentEdit_(sh, e) {
   const cId = colIdx_(sh, '学生ID');
   const cName = colIdx_(sh, '姓名');
   const cStatus = colIdx_(sh, '状态');
+  const cClass = colIdx_(sh, '班级');
+  const editedCol = e.range.getColumn();
+  const touchedClass = editedCol <= cClass && cClass < editedCol + e.range.getNumColumns();
 
   editedRows_(e).forEach(function (row) {
     const hasName = String(sh.getRange(row, cName).getValue()).trim() !== '';
@@ -71,6 +74,8 @@ function handleStudentEdit_(sh, e) {
       sh.getRange(row, cStatus).setValue(STUDENT_STATUS.ACTIVE);
     }
   });
+
+  if (touchedClass) refreshClassDropdown_(); // 新班级要马上出现在点名的下拉里
 }
 
 /** 付款表:自动编号、带出姓名、盖时间戳 */
@@ -176,10 +181,12 @@ function showHelp() {
       'h3{margin:18px 0 6px;font-size:14px;}h3:first-child{margin-top:0;}' +
       'code{background:#eceff1;padding:1px 5px;border-radius:3px;}' +
       'li{margin-bottom:4px;}</style>' +
-    '<h3>每天的流程</h3><ol>' +
-      '<li>上完课 → 选单 <code>📚 补习管理 → ✅ 载入今日点名</code></li>' +
+    '<h3>每堂课的流程</h3><ol>' +
+      '<li>到「今日点名」表,<b>B1 选日期、D1 选班级</b></li>' +
+      '<li>选单 <code>📚 补习管理 → ✅ 载入今日点名</code> → 只会载入那一班的学生</li>' +
       '<li>预设全部「出席」,只改有状况的那几个</li>' +
       '<li><code>📥 提交点名</code> → 系统会直接告诉你谁的堂数用完了</li></ol>' +
+      '<p>一天有两个班?点完一班,把 D1 换成另一班,再载入一次就好。</p>' +
     '<h3>出席状态的意思</h3><ul>' +
       '<li><b>出席</b> —— 扣一堂</li>' +
       '<li><b>缺席(照算)</b> —— 学生自己没来,照扣</li>' +

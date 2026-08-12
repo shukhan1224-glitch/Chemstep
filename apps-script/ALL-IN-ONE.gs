@@ -69,11 +69,11 @@ const NO = '否';
 /** 各表的栏位标题(顺序即栏序) */
 const HEADERS = {
   STUDENTS: [
-    '学生ID', '姓名', '家长称呼', 'WhatsApp号码', '科目',
-    '上课形式', '每堂收费RM', '配套堂数', '状态', '备注'
+    '学生ID', '姓名', '班级', '家长称呼', 'WhatsApp号码',
+    '每堂收费RM', '配套堂数', '状态', '备注'
   ],
   SESSIONS: [
-    '记录ID', '日期', '学生ID', '学生姓名', '科目',
+    '记录ID', '日期', '班级', '学生ID', '学生姓名',
     '出席状态', '是否扣堂', '备注', '记录时间', '最后修改'
   ],
   PAYMENTS: [
@@ -81,10 +81,10 @@ const HEADERS = {
     '购买堂数', '付款方式', '备注', '记录时间'
   ],
   ROLLCALL: [
-    '学生ID', '姓名', '科目', '目前余额', '出席状态', '备注'
+    '学生ID', '姓名', '目前余额', '出席状态', '备注'
   ],
   DASHBOARD: [
-    '学生ID', '姓名', '科目', '状态', '已付堂数', '已扣堂数', '余额',
+    '学生ID', '姓名', '班级', '状态', '已付堂数', '已扣堂数', '余额',
     '上次上课', '提醒状态', '发送催费', '已发送', '上次催费'
   ],
   REMINDER_LOG: ['时间', '学生ID', '学生姓名', '当时余额', '讯息内容'],
@@ -165,6 +165,16 @@ function getSettings_() {
     if (row[0] !== '') out[String(row[0]).trim()] = row[1];
   });
   return out;
+}
+
+/** 从「学生」表捞出所有班级名称(去重、排序),给点名的班级下拉用 */
+function getClasses_() {
+  const seen = {};
+  readTable_(SHEETS.STUDENTS).rows.forEach(function (s) {
+    const c = String(s['班级'] == null ? '' : s['班级']).trim();
+    if (c && s['状态'] !== STUDENT_STATUS.ENDED) seen[c] = true;
+  });
+  return Object.keys(seen).sort();
 }
 
 function settingNumber_(settings, key, fallback) {
@@ -325,7 +335,6 @@ function setupStudentsSheet_(ss) {
 
   applyDropdown_(sh, colIdx_(sh, '状态'), rows,
     [STUDENT_STATUS.ACTIVE, STUDENT_STATUS.PAUSED, STUDENT_STATUS.ENDED]);
-  applyDropdown_(sh, colIdx_(sh, '上课形式'), rows, ['一对一', '小组']);
 
   sh.getRange(2, colIdx_(sh, 'WhatsApp号码'), rows, 1).setNumberFormat('@'); // 保留开头的 0
   sh.getRange(2, colIdx_(sh, '每堂收费RM'), rows, 1).setNumberFormat('0.00');
@@ -339,6 +348,7 @@ function setupSessionsSheet_(ss) {
 
   applyDropdown_(sh, colIdx_(sh, '出席状态'), rows, objValues_(ATTENDANCE_STATUS));
   applyDropdown_(sh, colIdx_(sh, '是否扣堂'), rows, [YES, NO]);
+  // 不设定对齐方式:真日期会自动靠右、被当成文字的会靠左,一眼看得出输入错误
   sh.getRange(2, colIdx_(sh, '日期'), rows, 1).setNumberFormat('yyyy-mm-dd');
   sh.getRange(2, colIdx_(sh, '记录时间'), rows, 1).setNumberFormat('yyyy-mm-dd hh:mm');
   sh.getRange(2, colIdx_(sh, '最后修改'), rows, 1).setNumberFormat('yyyy-mm-dd hh:mm');
@@ -370,11 +380,14 @@ function setupPaymentsSheet_(ss) {
 function setupRollcallSheet_(ss) {
   const sh = getOrCreateSheet_(ss, SHEETS.ROLLCALL);
 
-  // 第 1 列是上课日期,第 2 列才是标题
+  // 第 1 列是「上课日期 + 班级」选择区,第 2 列才是标题
   sh.getRange('A1').setValue('上课日期 →').setFontWeight('bold');
   sh.getRange('B1').setNumberFormat('yyyy-mm-dd').setBackground('#fff8e1')
     .setBorder(true, true, true, true, false, false);
-  sh.getRange('C1').setValue('← 改这里就能补录过去的课').setFontColor('#90a4ae');
+  sh.getRange('C1').setValue('班级 →').setFontWeight('bold').setHorizontalAlignment('right');
+  sh.getRange('D1').setBackground('#fff8e1')
+    .setBorder(true, true, true, true, false, false);
+  sh.getRange('E1').setValue('← 先选好这两格,再按「载入今日点名」').setFontColor('#90a4ae');
 
   sh.getRange(2, 1, 1, HEADERS.ROLLCALL.length).setValues([HEADERS.ROLLCALL])
     .setFontWeight('bold').setBackground('#37474f').setFontColor('#ffffff');
@@ -384,14 +397,31 @@ function setupRollcallSheet_(ss) {
   }
 
   const rows = Math.max(sh.getMaxRows() - 2, 1);
-  sh.getRange(3, 5, rows, 1).setDataValidation(
+  const cStatus = HEADERS.ROLLCALL.indexOf('出席状态') + 1;
+  sh.getRange(3, cStatus, rows, 1).setDataValidation(
     SpreadsheetApp.newDataValidation()
       .requireValueInList(objValues_(ATTENDANCE_STATUS), true)
       .setAllowInvalid(false).build()
   );
-  sh.setColumnWidth(5, 150);
-  sh.setColumnWidth(6, 240);
+  sh.setColumnWidth(cStatus, 150);
+  sh.setColumnWidth(cStatus + 1, 240);
+  refreshClassDropdown_();
   return sh;
+}
+
+/** 把「今日点名」D1 的班级下拉,依「学生」表现有的班级重建 */
+function refreshClassDropdown_() {
+  const sh = ss_().getSheetByName(SHEETS.ROLLCALL);
+  if (!sh) return;
+  const classes = getClasses_();
+  const cell = sh.getRange('D1');
+  if (!classes.length) { cell.clearDataValidations(); return; }
+  cell.setDataValidation(
+    SpreadsheetApp.newDataValidation()
+      .requireValueInList(classes, true)
+      .setAllowInvalid(false).build()
+  );
+  if (classes.indexOf(String(cell.getValue()).trim()) === -1) cell.clearContent();
 }
 
 function setupDashboardSheet_(ss) {
@@ -428,21 +458,39 @@ function objValues_(obj) {
  * 大部分学生都是「出席」,所以预设就是出席,你只需要动有状况的那几个。
  */
 
-/** 载入在读学生到「今日点名」 */
+/** 载入某个班级的在读学生到「今日点名」 */
 function loadRollcall() {
+  const ui = SpreadsheetApp.getUi();
   const sh = sheet_(SHEETS.ROLLCALL);
+  refreshClassDropdown_();
+
+  const klass = String(sh.getRange('D1').getValue()).trim();
+  if (!klass) {
+    ss_().setActiveSheet(sh);
+    const classes = getClasses_();
+    ui.alert('请先选班级',
+      classes.length
+        ? '在「今日点名」的 D1 选一个班级,再按一次「载入今日点名」。\n\n目前有的班级:\n• ' + classes.join('\n• ')
+        : '「学生」表里还没有任何班级。请先在学生表填上「班级」栏。',
+      ui.ButtonSet.OK);
+    return;
+  }
+
   const students = readTable_(SHEETS.STUDENTS).rows.filter(function (s) {
-    return s['学生ID'] !== '' && s['状态'] === STUDENT_STATUS.ACTIVE;
+    return s['学生ID'] !== '' &&
+           s['状态'] === STUDENT_STATUS.ACTIVE &&
+           String(s['班级']).trim() === klass;
   });
 
   // 清掉上一轮残留
   if (sh.getMaxRows() > 2) {
-    sh.getRange(3, 1, sh.getMaxRows() - 2, HEADERS.ROLLCALL.length).clearContent();
+    sh.getRange(3, 1, sh.getMaxRows() - 2, HEADERS.ROLLCALL.length)
+      .clearContent().setBackground(null);
   }
 
   if (!students.length) {
     ss_().setActiveSheet(sh);
-    SpreadsheetApp.getUi().alert('「学生」表里没有状态为「在读」的学生。请先加学生。');
+    ui.alert('「' + klass + '」这个班没有状态为「在读」的学生。');
     return;
   }
 
@@ -463,19 +511,20 @@ function loadRollcall() {
     return [
       s['学生ID'],
       s['姓名'],
-      s['科目'],
       b.balance,
       existing[s['学生ID']] || ATTENDANCE_STATUS.PRESENT,
       existing[s['学生ID']] ? '⚠️ 当天已有记录,提交时会略过' : ''
     ];
   });
 
+  const cStatus = HEADERS.ROLLCALL.indexOf('出席状态') + 1;
   sh.getRange(3, 1, out.length, HEADERS.ROLLCALL.length).setValues(out);
-  sh.getRange(3, 1, out.length, 4).setBackground('#f5f5f5'); // 唯读区域淡灰
-  sh.getRange(3, 5, out.length, 2).setBackground('#ffffff');
+  sh.getRange(3, 1, out.length, cStatus - 1).setBackground('#f5f5f5'); // 唯读区域淡灰
+  sh.getRange(3, cStatus, out.length, 2).setBackground('#ffffff');
   ss_().setActiveSheet(sh);
 
-  toast_('已载入 ' + out.length + ' 位学生,预设全部「出席」。改完有状况的那几个再按「提交点名」。');
+  toast_(klass + ':已载入 ' + out.length + ' 位学生,预设全部「出席」。' +
+         '改完有状况的那几个再按「提交点名」。');
 }
 
 /** 把「今日点名」的内容写进「课程记录」 */
@@ -495,16 +544,17 @@ function submitRollcall() {
   if (isNaN(date.getTime())) { ui.alert('B1 的日期看不懂,请用日期格式(例如 2026-08-07)。'); return; }
   const targetKey = dateKey_(date);
 
+  const klass = String(sh.getRange('D1').getValue()).trim();
+  if (!klass) { ui.alert('请先在 D1 选班级。'); return; }
+
   // 已存在的记录:同一个学生、同一天,只算一次
   const already = {};
   readTable_(SHEETS.SESSIONS).rows.forEach(function (r) {
     if (dateKey_(r['日期']) === targetKey) already[r['学生ID']] = true;
   });
 
-  const subjectById = {};
-  readTable_(SHEETS.STUDENTS).rows.forEach(function (s) { subjectById[s['学生ID']] = s['科目']; });
-
   const data = sh.getRange(3, 1, lastRow - 2, HEADERS.ROLLCALL.length).getValues();
+  const cStatus = HEADERS.ROLLCALL.indexOf('出席状态');
   const now = new Date();
   const toAppend = [];
   const skipped = [];
@@ -514,8 +564,8 @@ function submitRollcall() {
   data.forEach(function (row) {
     const id = String(row[0]).trim();
     const name = row[1];
-    const status = String(row[4]).trim();
-    const note = row[5];
+    const status = String(row[cStatus]).trim();
+    const note = row[cStatus + 1];
 
     if (!id || !status) return;
     if (!(status in CHARGEABLE_BY_STATUS)) {
@@ -533,7 +583,7 @@ function submitRollcall() {
     counts[status] = (counts[status] || 0) + 1;
 
     toAppend.push([
-      recId, date, id, name, subjectById[id] || row[2],
+      recId, date, klass, id, name,
       status, chargeable,
       String(note).indexOf('⚠️') === 0 ? '' : note,
       now, ''
@@ -548,13 +598,13 @@ function submitRollcall() {
   const sessions = sheet_(SHEETS.SESSIONS);
   sessions.getRange(sessions.getLastRow() + 1, 1, toAppend.length, HEADERS.SESSIONS.length)
           .setValues(toAppend);
-  logAudit_(SHEETS.SESSIONS, targetKey, '提交点名', '', toAppend.length + ' 笔');
+  logAudit_(SHEETS.SESSIONS, targetKey + ' ' + klass, '提交点名', '', toAppend.length + ' 笔');
 
   refreshDashboard();
 
   // 提交完直接告诉你「谁该催费了」—— 这才是这个系统存在的理由
   const due = getStudentsNeedingReminder_();
-  let msg = '✅ ' + targetKey + ' 已记录 ' + toAppend.length + ' 笔。\n\n';
+  let msg = '✅ ' + klass + ' · ' + targetKey + ' 已记录 ' + toAppend.length + ' 笔。\n\n';
   Object.keys(counts).forEach(function (k) { msg += '• ' + k + ':' + counts[k] + '\n'; });
   const charged = toAppend.filter(function (r) { return r[6] === YES; }).length;
   msg += '\n其中扣堂 ' + charged + ' 堂、免扣 ' + (toAppend.length - charged) + ' 堂。';
@@ -563,7 +613,7 @@ function submitRollcall() {
 
   if (due.length) {
     msg += '\n\n🔴 以下学生堂数用完,该催费了:\n• ' +
-           due.map(function (d) { return d.name + '(余额 ' + d.balance + ')'; }).join('\n• ') +
+           due.map(function (d) { return d.name + '(' + d.klass + ',余额 ' + d.balance + ')'; }).join('\n• ') +
            '\n\n到「总览」按「📱 发送催费」就会带出写好的 WhatsApp 讯息。';
   } else {
     msg += '\n\n🟢 目前没有人需要催费。';
@@ -639,9 +689,18 @@ function refreshDashboard() {
   const dueThreshold = settingNumber_(settings, '催费门槛(余额≤)', 0);
   const warnThreshold = settingNumber_(settings, '预告门槛(余额=)', 1);
 
-  const students = readTable_(SHEETS.STUDENTS).rows.filter(function (s) {
-    return s['学生ID'] !== '' && s['状态'] !== STUDENT_STATUS.ENDED;
-  });
+  // 依 班级 → 余额 排序:同班的排在一起,快没堂数的排最上面
+  const students = readTable_(SHEETS.STUDENTS).rows
+    .filter(function (s) {
+      return s['学生ID'] !== '' && s['状态'] !== STUDENT_STATUS.ENDED;
+    })
+    .sort(function (a, b) {
+      const ka = String(a['班级'] || ''), kb = String(b['班级'] || '');
+      if (ka !== kb) return ka < kb ? -1 : 1;
+      const ba = (balances[a['学生ID']] || {}).balance || 0;
+      const bb = (balances[b['学生ID']] || {}).balance || 0;
+      return ba - bb;
+    });
 
   // 清掉旧内容(含核取方块的验证规则)
   if (sh.getMaxRows() > 1) {
@@ -658,7 +717,7 @@ function refreshDashboard() {
                 : '🟢 正常';
     const link = b.balance <= warnThreshold ? buildWaFormula_(s, b, settings) : '';
     return [
-      id, s['姓名'], s['科目'], s['状态'],
+      id, s['姓名'], s['班级'], s['状态'],
       b.paid, b.charged, b.balance,
       b.lastSession || '',
       state, link, false,
@@ -675,7 +734,11 @@ function refreshDashboard() {
   sh.getRange(2, colIdx_(sh, '上次催费'), rows.length, 1).setNumberFormat('yyyy-mm-dd hh:mm');
 
   applyDashboardColors_(sh, rows.length);
-  toast_('总览已更新(' + rows.length + ' 位学生)。');
+  refreshClassDropdown_();
+
+  const dueCount = rows.filter(function (r) { return r[8].indexOf('该催费') > -1; }).length;
+  toast_('总览已更新:' + rows.length + ' 位学生 · ' + getClasses_().length + ' 个班' +
+         (dueCount ? ' · 🔴 ' + dueCount + ' 位该催费' : ' · 🟢 无人需要催费'));
 }
 
 function applyDashboardColors_(sh, numRows) {
@@ -711,7 +774,10 @@ function getStudentsNeedingReminder_() {
       return b && b.balance <= dueThreshold;
     })
     .map(function (s) {
-      return { id: s['学生ID'], name: s['姓名'], balance: balances[s['学生ID']].balance };
+      return {
+        id: s['学生ID'], name: s['姓名'], klass: s['班级'],
+        balance: balances[s['学生ID']].balance
+      };
     });
 }
 
@@ -789,6 +855,7 @@ function showReminderDrafts() {
       return {
         id: s['学生ID'],
         name: s['姓名'],
+        klass: s['班级'],
         balance: b.balance,
         urgent: b.balance <= dueThreshold,
         phone: phone,
@@ -796,7 +863,10 @@ function showReminderDrafts() {
         url: phone ? 'https://wa.me/' + phone + '?text=' + encodeURIComponent(text) : ''
       };
     })
-    .sort(function (a, b) { return a.balance - b.balance; });
+    .sort(function (a, b) {
+      if (a.balance !== b.balance) return a.balance - b.balance;  // 最急的排最前
+      return String(a.klass) < String(b.klass) ? -1 : 1;
+    });
 
   SpreadsheetApp.getUi().showModalDialog(
     HtmlService.createHtmlOutput(reminderDialogHtml_(items)).setWidth(520).setHeight(600),
@@ -818,7 +888,8 @@ function reminderDialogHtml_(items) {
       body +=
         '<div class="card ' + (it.urgent ? 'urgent' : 'warn') + '">' +
           '<div class="head">' +
-            '<span class="name">' + esc(it.name) + '</span>' +
+            '<span class="name">' + esc(it.name) +
+              (it.klass ? ' <span class="klass">' + esc(it.klass) + '</span>' : '') + '</span>' +
             '<span class="badge">余额 ' + it.balance + ' 堂</span>' +
           '</div>' +
           '<pre>' + esc(it.text) + '</pre>' +
@@ -839,6 +910,7 @@ function reminderDialogHtml_(items) {
     '.card.urgent{border-left-color:#e53935;}' +
     '.head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;}' +
     '.name{font-weight:700;font-size:15px;}' +
+    '.klass{font-weight:400;font-size:12px;color:#78909c;}' +
     '.badge{font-size:12px;background:#eceff1;border-radius:10px;padding:2px 9px;color:#546e7a;}' +
     'pre{white-space:pre-wrap;word-break:break-word;background:#f5f7f8;border-radius:6px;' +
       'padding:10px;font-size:13px;line-height:1.6;margin:0 0 10px;font-family:inherit;}' +
@@ -914,6 +986,9 @@ function handleStudentEdit_(sh, e) {
   const cId = colIdx_(sh, '学生ID');
   const cName = colIdx_(sh, '姓名');
   const cStatus = colIdx_(sh, '状态');
+  const cClass = colIdx_(sh, '班级');
+  const editedCol = e.range.getColumn();
+  const touchedClass = editedCol <= cClass && cClass < editedCol + e.range.getNumColumns();
 
   editedRows_(e).forEach(function (row) {
     const hasName = String(sh.getRange(row, cName).getValue()).trim() !== '';
@@ -928,6 +1003,8 @@ function handleStudentEdit_(sh, e) {
       sh.getRange(row, cStatus).setValue(STUDENT_STATUS.ACTIVE);
     }
   });
+
+  if (touchedClass) refreshClassDropdown_(); // 新班级要马上出现在点名的下拉里
 }
 
 /** 付款表:自动编号、带出姓名、盖时间戳 */
@@ -1033,10 +1110,12 @@ function showHelp() {
       'h3{margin:18px 0 6px;font-size:14px;}h3:first-child{margin-top:0;}' +
       'code{background:#eceff1;padding:1px 5px;border-radius:3px;}' +
       'li{margin-bottom:4px;}</style>' +
-    '<h3>每天的流程</h3><ol>' +
-      '<li>上完课 → 选单 <code>📚 补习管理 → ✅ 载入今日点名</code></li>' +
+    '<h3>每堂课的流程</h3><ol>' +
+      '<li>到「今日点名」表,<b>B1 选日期、D1 选班级</b></li>' +
+      '<li>选单 <code>📚 补习管理 → ✅ 载入今日点名</code> → 只会载入那一班的学生</li>' +
       '<li>预设全部「出席」,只改有状况的那几个</li>' +
       '<li><code>📥 提交点名</code> → 系统会直接告诉你谁的堂数用完了</li></ol>' +
+      '<p>一天有两个班?点完一班,把 D1 换成另一班,再载入一次就好。</p>' +
     '<h3>出席状态的意思</h3><ul>' +
       '<li><b>出席</b> —— 扣一堂</li>' +
       '<li><b>缺席(照算)</b> —— 学生自己没来,照扣</li>' +
