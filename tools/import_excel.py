@@ -230,6 +230,8 @@ def main():
                     help='「已缴费」的底色 RGB(例如 FFFF00);auto=自动侦测;none=不读底色')
     ap.add_argument('--zero-charged', action='store_true',
                     help='旧档的 0 是「缺席但照算」而不是「不算钱」时加这个')
+    ap.add_argument('--paid-override', action='append', default=[], metavar='姓名=堂数',
+                    help='手动指定某位学生的已缴堂数,盖过底色算出来的结果。可重复')
     ap.add_argument('--fee', type=float, default=50, help='每期收费,预设 50')
     ap.add_argument('--package', type=int, default=4, help='每期堂数,预设 4')
     ap.add_argument('--class-fee', action='append', default=[], type=parse_class_fee,
@@ -259,6 +261,17 @@ def main():
         fill_note = '指定为 %s' % paid_fill
 
     fee_by_class = {k: (amt, n) for k, amt, n in args.class_fee}
+
+    overrides = {}
+    for spec in args.paid_override:
+        if '=' not in spec:
+            sys.exit('--paid-override 的格式是 姓名=堂数,例如 --paid-override 蓝子健=16')
+        who, n = spec.split('=', 1)
+        try:
+            overrides[who.strip()] = int(n)
+        except ValueError:
+            sys.exit('--paid-override 的堂数要是整数:%s' % spec)
+    used_overrides = set()
 
     report = ['旧 Excel 汇入报告',
               '来源:%s' % os.path.basename(args.xlsx),
@@ -318,10 +331,26 @@ def main():
             entries_by_date = sorted(entries, key=lambda x: x[0])
             charged = sum(1 for _, st, _ in entries if CHARGEABLE.get(st) == YES)
             paid_count = sum(1 for _, _, paid in entries if paid)
+
+            if name in overrides:
+                report.append('    ✏️ %s 的已缴堂数由 %d 手动改为 %d'
+                              % (name, paid_count, overrides[name]))
+                paid_count = overrides[name]
+                used_overrides.add(name)
+
             balance = paid_count - charged
-            # 缴费应该一期一期缴,已缴堂数不是配套的整数倍就值得看一眼
+            # 老师是「涂满 4 个 1」才算一期,所以已缴一定是配套的整数倍。
+            # 不是的话,把上下两个整期的边界算出来让老师挑。
             odd = bool(lessons) and paid_count % lessons != 0
-            balances.append((klass, name, paid_count, charged, balance, odd, lessons))
+            hint = None
+            if odd:
+                # entries 依工作表的栏位顺序排列,也就是老师涂色的顺序
+                ones = [d for d, st, _ in entries if CHARGEABLE.get(st) == YES]
+                low = paid_count - paid_count % lessons
+                high = low + lessons
+                hint = (low, ones[low - 1] if 0 < low <= len(ones) else None,
+                        high, ones[high - 1] if 0 < high <= len(ones) else None)
+            balances.append((klass, name, paid_count, charged, balance, odd, lessons, hint))
 
             students.append([student_id, name, klass, '', '',
                              fmt_money(per_lesson), lessons, '在读',
@@ -360,13 +389,13 @@ def main():
                '%-10s %-12s %5s %5s %6s  %s' % ('班级', '学生', '已缴', '已上', '余额', '状态')]
     owed = 0
     odd_ones = []
-    for klass, name, paid_count, charged, balance, odd, lessons in sorted(
+    for klass, name, paid_count, charged, balance, odd, lessons, hint in sorted(
             balances, key=lambda x: (x[0], x[4])):
         tag = ('🔴 欠 %d 堂' % -balance if balance < 0 else
                '🟢 刚好结清' if balance == 0 else '🟡 预缴 %d 堂' % balance)
         if odd:
             tag += '  ⚠️'
-            odd_ones.append((klass, name, paid_count, lessons))
+            odd_ones.append((klass, name, paid_count, lessons, hint))
         report.append('%-10s %-12s %5d %5d %6d  %s'
                       % (klass, name, paid_count, charged, balance, tag))
         if balance < 0:
@@ -376,12 +405,23 @@ def main():
 
     if odd_ones:
         report += ['',
-                   '⚠️ 这几位的「已缴」不是配套堂数的整数倍 —— 缴费通常是一期一期缴,',
-                   '   请特别核对这几个人的底色范围有没有涂错:']
-        for klass, name, paid_count, lessons in odd_ones:
-            report.append('     %-10s %-12s 已缴 %d 堂(配套 %d 堂,差 %d 堂到整期)'
-                          % (klass, name, paid_count, lessons,
-                             lessons - paid_count % lessons))
+                   '⚠️ 缴费是「涂满 %d 个 1 算一期」,所以已缴堂数应该是 %d 的倍数。'
+                   % (args.package, args.package),
+                   '   下面这几位不是,代表底色可能多涂或少涂 —— 请核对后用',
+                   '   --paid-override 姓名=堂数 重跑一次:']
+        for klass, name, paid_count, lessons, hint in odd_ones:
+            report.append('     %-10s %-12s 目前算出 %d 堂' % (klass, name, paid_count))
+            if hint:
+                low, low_date, high, high_date = hint
+                report.append('       ↓ 少涂到 %d 堂 → 第 %d 个 1 在 %s'
+                              % (low, low, low_date or '(没有这一堂)'))
+                report.append('       ↑ 多涂到 %d 堂 → 第 %d 个 1 在 %s'
+                              % (high, high, high_date or '(还没上到这一堂)'))
+
+    unknown = set(overrides) - used_overrides
+    if unknown:
+        report += ['', '⚠️ --paid-override 里这些名字在档案中找不到:%s'
+                   % '、'.join(sorted(unknown))]
 
     report += ['',
                '学生      %d 位' % len(students),
