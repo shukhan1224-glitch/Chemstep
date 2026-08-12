@@ -582,6 +582,71 @@ function loadRollcall() {
          '改完有状况的那几个再按「提交点名」。');
 }
 
+/**
+ * 撤销某一次点名(整班)。
+ * 用「今日点名」的 B1 日期 + D1 班级当条件,把那次的记录整批删掉。
+ * 删之前会先列出内容让你确认,删除的事实会写进「修改日志」。
+ *
+ * 只有一个学生算错的话,不必用这个 —— 直接到「课程记录」改他那一行的
+ * 出席状态就好,余额会自动重算。
+ */
+function undoRollcall() {
+  const ui = SpreadsheetApp.getUi();
+  const rc = sheet_(SHEETS.ROLLCALL);
+
+  const rawDate = rc.getRange('B1').getValue();
+  const klass = String(rc.getRange('D1').getValue()).trim();
+  if (!rawDate || !klass) {
+    ss_().setActiveSheet(rc);
+    ui.alert('请先在「今日点名」填好 B1 上课日期、D1 班级,再执行撤销。');
+    return;
+  }
+  const date = (rawDate instanceof Date) ? rawDate : new Date(rawDate);
+  if (isNaN(date.getTime())) { ui.alert('B1 的日期看不懂。'); return; }
+  const key = dateKey_(date);
+
+  const hits = readTable_(SHEETS.SESSIONS).rows.filter(function (r) {
+    return dateKey_(r['日期']) === key && String(r['班级']).trim() === klass;
+  });
+  if (!hits.length) {
+    ui.alert('找不到「' + klass + '」在 ' + key + ' 的点名记录。\n\n' +
+             '确认一下 B1 的日期和 D1 的班级对不对。');
+    return;
+  }
+
+  const charged = hits.filter(function (r) {
+    return String(r['是否扣堂']).trim() === YES;
+  }).length;
+  const list = hits.map(function (r) {
+    return r['学生姓名'] + '(' + r['出席状态'] + ')';
+  }).join('\n• ');
+
+  const answer = ui.alert(
+    '确定要撤销这次点名吗?',
+    klass + ' · ' + key + '\n\n' +
+    '共 ' + hits.length + ' 笔,其中 ' + charged + ' 笔有扣堂:\n• ' + list + '\n\n' +
+    '删除后这 ' + charged + ' 堂会还给学生(余额各加 1)。\n' +
+    '这个动作会记进「修改日志」。',
+    ui.ButtonSet.YES_NO
+  );
+  if (answer !== ui.Button.YES) return;
+
+  // 由下往上删,不然删掉一行之后下面的列号会往上跑
+  const sh = sheet_(SHEETS.SESSIONS);
+  hits.map(function (r) { return r._row; })
+      .sort(function (a, b) { return b - a; })
+      .forEach(function (row) { sh.deleteRow(row); });
+
+  logAudit_(SHEETS.SESSIONS, klass + ' ' + key, '撤销整次点名',
+            hits.length + ' 笔(扣堂 ' + charged + ')', '已删除');
+  refreshDashboard();
+
+  ui.alert('✅ 已撤销',
+           klass + ' · ' + key + '\n\n' +
+           '删除 ' + hits.length + ' 笔,' + charged + ' 堂已还给学生。',
+           ui.ButtonSet.OK);
+}
+
 /** 把「今日点名」的内容写进「课程记录」 */
 function submitRollcall() {
   const ui = SpreadsheetApp.getUi();
@@ -1014,6 +1079,7 @@ function onOpen() {
     .createMenu('📚 补习管理')
     .addItem('✅ 载入今日点名', 'loadRollcall')
     .addItem('📥 提交点名', 'submitRollcall')
+    .addItem('↩️ 撤销某次点名', 'undoRollcall')
     .addSeparator()
     .addItem('💵 记录收款', 'showPaymentDialog')
     .addItem('📱 查看催费草稿', 'showReminderDrafts')

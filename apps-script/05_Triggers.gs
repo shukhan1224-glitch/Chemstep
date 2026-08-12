@@ -13,6 +13,7 @@ function onOpen() {
     .createMenu('📚 补习管理')
     .addItem('✅ 载入今日点名', 'loadRollcall')
     .addItem('📥 提交点名', 'submitRollcall')
+    .addItem('↩️ 撤销某次点名', 'undoRollcall')
     .addSeparator()
     .addItem('💵 记录收款', 'showPaymentDialog')
     .addItem('📱 查看催费草稿', 'showReminderDrafts')
