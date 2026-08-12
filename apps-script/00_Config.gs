@@ -49,6 +49,9 @@ const STUDENT_STATUS = {
 const YES = '是';
 const NO = '否';
 
+/** 收款方式 —— 记录收款的视窗和「付款记录」的下拉都用这一份 */
+const PAYMENT_METHODS = ['银行转账', 'DuitNow / QR', '现金', 'eWallet', '其他'];
+
 /** 各表的栏位标题(顺序即栏序) */
 const HEADERS = {
   STUDENTS: [
@@ -64,7 +67,7 @@ const HEADERS = {
     '购买堂数', '付款方式', '备注', '记录时间'
   ],
   ROLLCALL: [
-    '学生ID', '姓名', '目前余额', '出席状态', '备注'
+    '学生ID', '姓名', '目前余额', '欠款RM', '出席状态', '备注'
   ],
   DASHBOARD: [
     '学生ID', '姓名', '班级', '状态', '已付堂数', '已扣堂数', '余额', '欠款RM',

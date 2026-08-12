@@ -163,8 +163,7 @@ function setupPaymentsSheet_(ss) {
   const sh = setupPlainSheet_(ss, SHEETS.PAYMENTS, HEADERS.PAYMENTS);
   const rows = Math.max(sh.getMaxRows() - 1, 1);
 
-  applyDropdown_(sh, colIdx_(sh, '付款方式'), rows,
-    ['银行转账', 'DuitNow / QR', '现金', 'eWallet', '其他']);
+  applyDropdown_(sh, colIdx_(sh, '付款方式'), rows, PAYMENT_METHODS.concat(['旧档结转']));
   sh.getRange(2, colIdx_(sh, '日期'), rows, 1).setNumberFormat('yyyy-mm-dd');
   sh.getRange(2, colIdx_(sh, '金额RM'), rows, 1).setNumberFormat('0.00');
   sh.getRange(2, colIdx_(sh, '记录时间'), rows, 1).setNumberFormat('yyyy-mm-dd hh:mm');
@@ -192,13 +191,27 @@ function setupRollcallSheet_(ss) {
 
   const rows = Math.max(sh.getMaxRows() - 2, 1);
   const cStatus = HEADERS.ROLLCALL.indexOf('出席状态') + 1;
+  const cOwed = HEADERS.ROLLCALL.indexOf('欠款RM') + 1;
   sh.getRange(3, cStatus, rows, 1).setDataValidation(
     SpreadsheetApp.newDataValidation()
       .requireValueInList(objValues_(ATTENDANCE_STATUS), true)
       .setAllowInvalid(false).build()
   );
+  sh.setColumnWidth(1, 70);
+  sh.setColumnWidth(2, 110);
+  sh.setColumnWidth(3, 90);
+  sh.setColumnWidth(cOwed, 90);
   sh.setColumnWidth(cStatus, 150);
   sh.setColumnWidth(cStatus + 1, 240);
+  sh.getRange(3, cOwed, rows, 1).setNumberFormat('#,##0.00');
+
+  // 有欠款的整格标红,点名时一眼看到
+  sh.setConditionalFormatRules([
+    SpreadsheetApp.newConditionalFormatRule()
+      .whenNumberGreaterThan(0).setBackground('#ffcdd2').setFontColor('#b71c1c').setBold(true)
+      .setRanges([sh.getRange(3, cOwed, rows, 1)]).build()
+  ]);
+
   refreshClassDropdown_();
   return sh;
 }

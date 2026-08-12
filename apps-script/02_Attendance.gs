@@ -52,13 +52,17 @@ function loadRollcall() {
     if (dateKey_(r['日期']) === targetKey) existing[r['学生ID']] = r['出席状态'];
   });
 
+  const settings = getSettings_();
+  const defaultFee = settingNumber_(settings, '默认每堂收费RM', 50);
   const balances = computeBalances_();
   const out = students.map(function (s) {
     const b = balances[s['学生ID']] || { balance: 0 };
+    const perLesson = Number(s['每堂收费RM']) || defaultFee;
     return [
       s['学生ID'],
       s['姓名'],
       b.balance,
+      b.balance < 0 ? -b.balance * perLesson : '',   // 点名时就看得到谁欠钱
       existing[s['学生ID']] || ATTENDANCE_STATUS.PRESENT,
       existing[s['学生ID']] ? '⚠️ 当天已有记录,提交时会略过' : ''
     ];
