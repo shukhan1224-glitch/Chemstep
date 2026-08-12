@@ -37,6 +37,14 @@ function setupWorkbook() {
   });
   ss.setActiveSheet(ss.getSheetByName(SHEETS.DASHBOARD));
 
+  // 一定要跟着重画总览:上面只换了标题列,底下还是上一次的资料。
+  // 栏位数量若有变动(例如版本更新新增了栏),不重画就会整排错位。
+  try {
+    refreshDashboard();
+  } catch (e) {
+    logAudit_(SHEETS.DASHBOARD, '', '初始化后重画总览失败', '', e.message);
+  }
+
   SpreadsheetApp.getUi().alert(
     '✅ 初始化完成',
     '所有工作表已建立。\n\n下一步:\n' +
