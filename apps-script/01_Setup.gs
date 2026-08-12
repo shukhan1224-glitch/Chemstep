@@ -16,12 +16,15 @@ function setupWorkbook() {
   setupPlainSheet_(ss, SHEETS.REMINDER_LOG, HEADERS.REMINDER_LOG);
   setupPlainSheet_(ss, SHEETS.AUDIT, HEADERS.AUDIT);
 
-  // 删掉 Google 预设的空白 "Sheet1" / "工作表1"
+  // 删掉 Google 预设的空白 "Sheet1" / "工作表1"。
+  // 有资料的工作表一律保留 —— 由旧 Excel 转过来的旧分页会原封不动留着。
+  const kept = [];
   ss.getSheets().forEach(function (sh) {
     const name = sh.getName();
     const known = Object.keys(SHEETS).some(function (k) { return SHEETS[k] === name; });
-    if (!known && sh.getLastRow() === 0 && ss.getSheets().length > 1) {
-      ss.deleteSheet(sh);
+    if (!known) {
+      if (sh.getLastRow() === 0 && ss.getSheets().length > 1) ss.deleteSheet(sh);
+      else kept.push(name);
     }
   });
 
@@ -38,8 +41,11 @@ function setupWorkbook() {
     '✅ 初始化完成',
     '所有工作表已建立。\n\n下一步:\n' +
     '1. 到「设置」填你的名字、配套堂数、收费\n' +
-    '2. 到「学生」加学生(姓名填了就会自动配学生ID)\n' +
-    '3. 每次上完课 → 补习管理 → 载入今日点名\n\n' +
+    '2. 到「学生」加学生(姓名和班级填了就会自动配学生ID)\n' +
+    '3. 上完课 → 今日点名选好日期和班级 → 载入今日点名\n\n' +
+    (kept.length
+      ? '📁 你原有的工作表已原封不动保留:\n   ' + kept.join('、') + '\n\n'
+      : '') +
     '提醒:讯息不会自动送出,系统只会帮你写好草稿 + 产生 WhatsApp 链接,由你按下才发。',
     SpreadsheetApp.getUi().ButtonSet.OK
   );
