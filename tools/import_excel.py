@@ -307,9 +307,14 @@ def main():
             sys.exit('--paid-override 的堂数要是整数:%s' % spec)
     used_overrides = set()
 
+    # 把完整指令记下来,以后要重跑或加 override 时直接复制
+    cmd = ' '.join(('"%s"' % a if ' ' in a else a)
+                   for a in ['python3', 'tools/import_excel.py'] + sys.argv[1:])
+
     report = ['旧 Excel 汇入报告',
               '来源:%s' % os.path.basename(args.xlsx),
               '产生时间:%s' % datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
+              '本次指令:%s' % cmd,
               '日月对调修正:%s' % ('开启' if swap_fix else '关闭'),
               '已缴费底色:%s' % fill_note,
               '1 / 0 的解读:1 = 算钱(出席)、0 = %s'
@@ -459,10 +464,10 @@ def main():
             report.append('     %-10s %-12s 目前算出 %d 堂' % (klass, name, paid_count))
             if hint:
                 low, low_date, high, high_date = hint
-                report.append('       ↓ 少涂到 %d 堂 → 第 %d 个 1 在 %s'
-                              % (low, low, low_date or '(没有这一堂)'))
-                report.append('       ↑ 多涂到 %d 堂 → 第 %d 个 1 在 %s'
-                              % (high, high, high_date or '(还没上到这一堂)'))
+                report.append('       ↓ 如果是「多涂了」→ 实际 %d 堂,黄色应该停在 %s'
+                              % (low, low_date or '(没有这一堂)'))
+                report.append('       ↑ 如果是「少涂了」→ 实际 %d 堂,黄色应该涂到 %s'
+                              % (high, high_date or '(这一堂还没上,要用预缴记号)'))
 
     unknown = set(overrides) - used_overrides
     if unknown:
