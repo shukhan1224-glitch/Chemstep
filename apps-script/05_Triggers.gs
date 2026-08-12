@@ -27,6 +27,27 @@ function onOpen() {
     .addToUi();
 }
 
+/**
+ * 备案:如果重新整理后「📚 补习管理」还是不出现,在 Apps Script 里执行这个函式。
+ *
+ * onOpen 属于「简单触发器」,某些情况下(公司/学校的 Google Workspace 政策、
+ * 浏览器扩充套件、档案是从别人那里复制来的)不会自动执行。
+ * 改装成「可安装触发器」就会稳定跑。
+ */
+function installOpenTrigger() {
+  const ss = ss_();
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'onOpen') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('onOpen').forSpreadsheet(ss).onOpen().create();
+
+  // 顺便立刻建一次,不必等重新整理
+  onOpen();
+  Logger.log('✅ 已为「' + ss.getName() + '」安装开启触发器\n' +
+             '网址:' + ss.getUrl() + '\n' +
+             '回试算表重新整理(F5),选单就会出现。');
+}
+
 function onEdit(e) {
   if (!e || !e.range) return;
   const sh = e.range.getSheet();
