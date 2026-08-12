@@ -5,22 +5,29 @@
 
 用法:
     python3 tools/import_excel.py 旧点名表.xlsx -o out/
+    python3 tools/import_excel.py 旧点名表.xlsx -o out/ \
+        --class-fee 初二科学=80/4 --class-fee 高三=70/4
     python3 tools/import_excel.py 旧点名表.xlsx -o out/ --history none
-    python3 tools/import_excel.py 旧点名表.xlsx -o out/ --no-swap-fix
 
 产生:
-    out/学生.csv        贴进「学生」表 A2
-    out/课程记录.csv     贴进「课程记录」表 A2   (--history all 时才有)
-    out/付款记录.csv     贴进「付款记录」表 A2   (期初结转,让今天的余额归零)
-    out/汇入报告.txt     做了什么、跳过了什么
+    out/学生.csv        贴进「学生」表
+    out/课程记录.csv     贴进「课程记录」表   (--history all 时才有)
+    out/付款记录.csv     贴进「付款记录」表
+    out/汇入报告.txt     做了什么、跳过了什么、每个人现在欠几堂
 
-── 日期修正 ────────────────────────────────────────────────────────
-旧档的日期栏常常一半是文字、一半是数字。原因是 Excel 的地区设定是
-「月/日/年」,而使用者输入的是「日/月/年」:
-    输入 19/1/2026 → 19 不可能是月份 → Excel 放弃解析 → 存成文字(正确)
-    输入 12/1/2026 → 当成 12月1日   → 存成数字(日月被对调了)
-本程式预设会把数字那一半的日月对调回来,并用「同一班的星期是否一致」
-来验证。要关掉这个修正请加 --no-swap-fix。
+── 两个会自动处理的旧档特性 ──────────────────────────────────────
+1. 日期日月对调
+   旧档的日期栏常常一半是文字、一半是数字。原因是 Excel 的地区设定是
+   「月/日/年」而使用者输入「日/月/年」:
+       输入 19/1/2026 → 19 不可能是月份 → Excel 放弃解析 → 存成文字(正确)
+       输入 12/1/2026 → 当成 12月1日   → 存成数字(日月被对调了)
+   预设会把数字那一半的日月对调回来,并用「同一班的星期是否一致」验证。
+   要关掉请加 --no-swap-fix。
+
+2. 底色 = 已缴费
+   很多人会把已经收过钱的堂数涂上颜色(通常是黄色),从第一堂往后连续涂。
+   预设会自动找出档案里最常出现的那个底色,把涂色的格子数当成「已付堂数」,
+   转成付款记录。要指定颜色用 --paid-fill FFFF00,要关掉用 --paid-fill none。
 """
 
 import argparse
@@ -42,6 +49,9 @@ STATUS_PRESENT = '出席'
 STATUS_ABSENT = '缺席(照算)'
 YES, NO = '是', '否'
 CHARGEABLE = {STATUS_PRESENT: YES, STATUS_ABSENT: YES}
+
+# 视为「没有底色」的值
+BLANK_FILLS = {'None', '00000000', 'FFFFFFFF', 'FFFFFF'}
 
 STUDENT_HEADERS = ['学生ID', '姓名', '班级', '家长称呼', 'WhatsApp号码',
                    '每堂收费RM', '配套堂数', '状态', '备注']
@@ -93,6 +103,33 @@ def parse_header_date(value, swap_fix):
     return None, '看不懂的日期「%s」' % text
 
 
+# ── 底色 ────────────────────────────────────────────────────────────
+
+def fill_rgb(cell):
+    """回传储存格实心底色的 RGB 字串;没有底色回传 None"""
+    f = cell.fill
+    if f is None or f.fill_type != 'solid':
+        return None
+    rgb = str(getattr(f.fgColor, 'rgb', None))
+    if rgb in BLANK_FILLS:
+        return None
+    return rgb
+
+
+def detect_paid_fill(wb_fmt):
+    """自动找出「已缴费」的底色:出现次数最多的那个非白色实心底色"""
+    counts = Counter()
+    for ws in wb_fmt.worksheets:
+        for row in ws.iter_rows():
+            for cell in row:
+                rgb = fill_rgb(cell)
+                if rgb:
+                    counts[rgb] += 1
+    if not counts:
+        return None, counts
+    return counts.most_common(1)[0][0], counts
+
+
 # ── 读取旧档 ────────────────────────────────────────────────────────
 
 def find_blocks(ws):
@@ -104,42 +141,70 @@ def find_blocks(ws):
             if row[0].value is None and any(c.value is not None for c in row[1:])]
 
 
-def read_sheet(ws, swap_fix, report):
-    """回传 {学生姓名: [(date, 出席状态), ...]},顺序保留原表的学生顺序"""
+def read_sheet(ws_val, ws_fmt, swap_fix, paid_fill, report):
+    """
+    回传 (records, weekdays, bad_dates)
+    records = {学生姓名: [(date, 出席状态, 是否已缴), ...]},保留原表的学生顺序
+    """
     records = OrderedDict()
     weekdays = Counter()
     bad_dates = []
 
-    for block_row in find_blocks(ws):
+    for block_row in find_blocks(ws_val):
         header = {}
-        for cell in ws[block_row][1:]:
+        for cell in ws_val[block_row][1:]:
             if cell.value is None:
                 continue
             d, why = parse_header_date(cell.value, swap_fix)
             if d is None:
-                bad_dates.append('%s!%s %s' % (ws.title, cell.coordinate, why))
+                bad_dates.append('%s!%s %s' % (ws_val.title, cell.coordinate, why))
             else:
                 header[cell.column] = d
                 weekdays[WEEK[d.weekday()]] += 1
 
         r = block_row + 1
-        while r <= ws.max_row and ws.cell(r, 1).value is not None:
-            name = str(ws.cell(r, 1).value).strip()
+        while r <= ws_val.max_row and ws_val.cell(r, 1).value is not None:
+            name = str(ws_val.cell(r, 1).value).strip()
             records.setdefault(name, [])
             for col, d in header.items():
-                v = ws.cell(r, col).value
+                v = ws_val.cell(r, col).value
+                paid = paid_fill is not None and fill_rgb(ws_fmt.cell(r, col)) == paid_fill
                 if v is None or str(v).strip() == '':
+                    if paid:
+                        report.append('  ⚠️ %s!%s 有底色但没有出席记录,已忽略'
+                                      % (ws_val.title, ws_val.cell(r, col).coordinate))
                     continue          # 空白 = 当时还没入学 / 已退出,不是缺席
                 try:
                     n = int(float(v))
                 except (TypeError, ValueError):
                     report.append('  ⚠️ %s!%s 看不懂的出席值「%s」,已跳过'
-                                  % (ws.title, ws.cell(r, col).coordinate, v))
+                                  % (ws_val.title, ws_val.cell(r, col).coordinate, v))
                     continue
-                records[name].append((d, STATUS_PRESENT if n else STATUS_ABSENT))
+                records[name].append((d, STATUS_PRESENT if n else STATUS_ABSENT, paid))
             r += 1
 
     return records, weekdays, bad_dates
+
+
+# ── 收费设定 ────────────────────────────────────────────────────────
+
+def parse_class_fee(spec):
+    """把 '初二科学=80/4' 解析成 ('初二科学', 80.0, 4)"""
+    if '=' not in spec:
+        raise argparse.ArgumentTypeError('格式应为 班级=金额/堂数,例如 初二科学=80/4')
+    klass, rest = spec.split('=', 1)
+    if '/' not in rest:
+        raise argparse.ArgumentTypeError('格式应为 班级=金额/堂数,例如 初二科学=80/4')
+    amount, lessons = rest.split('/', 1)
+    try:
+        return klass.strip(), float(amount), int(lessons)
+    except ValueError:
+        raise argparse.ArgumentTypeError('金额和堂数要是数字,例如 初二科学=80/4')
+
+
+def fmt_money(x):
+    """20.0 → '20';17.5 → '17.50'"""
+    return str(int(x)) if float(x).is_integer() else '%.2f' % x
 
 
 # ── 主流程 ──────────────────────────────────────────────────────────
@@ -152,40 +217,78 @@ def main():
                     help='all=连历史出席记录一起汇入(预设);none=只汇入学生名单')
     ap.add_argument('--no-swap-fix', action='store_true',
                     help='不要修正日月对调(只在你确定旧档日期是对的时候用)')
-    ap.add_argument('--fee', type=float, default=50, help='每堂收费,预设 50')
-    ap.add_argument('--package', type=int, default=4, help='配套堂数,预设 4')
+    ap.add_argument('--paid-fill', default='auto',
+                    help='「已缴费」的底色 RGB(例如 FFFF00);auto=自动侦测;none=不读底色')
+    ap.add_argument('--fee', type=float, default=50, help='每期收费,预设 50')
+    ap.add_argument('--package', type=int, default=4, help='每期堂数,预设 4')
+    ap.add_argument('--class-fee', action='append', default=[], type=parse_class_fee,
+                    metavar='班级=金额/堂数',
+                    help='个别班级的收费,可重复,例如 --class-fee 高三=70/4')
     args = ap.parse_args()
 
     swap_fix = not args.no_swap_fix
-    wb = openpyxl.load_workbook(args.xlsx, data_only=True)
+    # 两次载入:一次拿值(公式会算好),一次拿格式(底色)
+    wb_val = openpyxl.load_workbook(args.xlsx, data_only=True)
+    wb_fmt = openpyxl.load_workbook(args.xlsx)
     os.makedirs(args.out, exist_ok=True)
+
+    # 决定「已缴费」的底色
+    fill_counts = Counter()
+    if args.paid_fill.lower() == 'none':
+        paid_fill = None
+        fill_note = '关闭(不读底色)'
+    elif args.paid_fill.lower() == 'auto':
+        paid_fill, fill_counts = detect_paid_fill(wb_fmt)
+        fill_note = ('自动侦测到 %s(%d 格)' % (paid_fill, fill_counts[paid_fill])
+                     if paid_fill else '档案里没有任何底色,视为没有缴费资料')
+    else:
+        paid_fill = args.paid_fill.upper()
+        if len(paid_fill) == 6:
+            paid_fill = 'FF' + paid_fill
+        fill_note = '指定为 %s' % paid_fill
+
+    fee_by_class = {k: (amt, n) for k, amt, n in args.class_fee}
 
     report = ['旧 Excel 汇入报告',
               '来源:%s' % os.path.basename(args.xlsx),
               '产生时间:%s' % datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
               '日月对调修正:%s' % ('开启' if swap_fix else '关闭'),
+              '已缴费底色:%s' % fill_note,
               '历史记录:%s' % ('一起汇入' if args.history == 'all' else '不汇入'),
               '']
 
-    students, sessions = [], []
+    if len(fill_counts) > 1:
+        report.append('⚠️ 档案里有不只一种底色,只有最常见的那个被当成「已缴费」:')
+        for rgb, n in fill_counts.most_common():
+            mark = '  ← 用这个' if rgb == paid_fill else ''
+            report.append('     %s  %d 格%s' % (rgb, n, mark))
+        report.append('   不对的话用 --paid-fill 指定。')
+        report.append('')
+
+    students, sessions, payments = [], [], []
+    balances = []
     seen_names = {}
     sid = pid = lid = 0
     today = datetime.date.today()
 
-    for ws in wb.worksheets:
-        klass = ws.title.strip()
-        records, weekdays, bad_dates = read_sheet(ws, swap_fix, report)
+    for ws_val in wb_val.worksheets:
+        klass = ws_val.title.strip()
+        ws_fmt = wb_fmt[ws_val.title]
+        records, weekdays, bad_dates = read_sheet(ws_val, ws_fmt, swap_fix, paid_fill, report)
         if not records:
             report.append('【%s】没有资料,跳过' % klass)
             continue
 
+        amount, lessons = fee_by_class.get(klass, (args.fee, args.package))
+        per_lesson = amount / lessons if lessons else 0
+
         main_day, main_count = weekdays.most_common(1)[0]
         total_dates = sum(weekdays.values())
-        report.append('【%s】%d 人 · %d 堂课 · 主要在星期%s(%d/%d)'
-                      % (klass, len(records), total_dates, main_day, main_count, total_dates))
+        report.append('【%s】%d 人 · %d 堂课 · 主要在星期%s(%d/%d) · %s堂 RM%s(每堂 RM%s)'
+                      % (klass, len(records), total_dates, main_day, main_count, total_dates,
+                         lessons, fmt_money(amount), fmt_money(per_lesson)))
         if main_count < total_dates:
-            others = ', '.join('星期%s×%d' % (d, n)
-                               for d, n in weekdays.most_common()[1:])
+            others = ', '.join('星期%s×%d' % (d, n) for d, n in weekdays.most_common()[1:])
             report.append('    其余不在固定日:%s(可能是补课)' % others)
         for b in bad_dates:
             report.append('    ⚠️ %s' % b)
@@ -198,40 +301,35 @@ def main():
                               % (name, seen_names[name], klass))
             seen_names[name] = klass
 
-            charged = sum(1 for _, st in entries if CHARGEABLE.get(st) == YES)
+            entries_by_date = sorted(entries, key=lambda x: x[0])
+            charged = sum(1 for _, st, _ in entries if CHARGEABLE.get(st) == YES)
+            paid_count = sum(1 for _, _, paid in entries if paid)
+            balance = paid_count - charged
+            balances.append((klass, name, paid_count, charged, balance))
+
             students.append([student_id, name, klass, '', '',
-                             args.fee, args.package, '在读',
-                             '由旧 Excel 汇入,历史 %d 堂' % charged])
+                             fmt_money(per_lesson), lessons, '在读',
+                             '旧 Excel 汇入:已上 %d 堂、已缴 %d 堂' % (charged, paid_count)])
 
             if args.history == 'all':
-                for d, st in sorted(entries):
+                for d, st, _ in entries_by_date:
                     lid += 1
                     sessions.append(['L%04d' % lid, d.isoformat(), klass,
                                      student_id, name, st, CHARGEABLE.get(st, NO),
                                      '旧 Excel 汇入', '', ''])
 
-    # 期初结转:补一笔付款,让「今天」的余额归零。
-    # 不这样做的话,汇入历史后每个人都会立刻变成大额欠费而被误催。
-    payments = []
-    if args.history == 'all':
-        charged_by_id = Counter(s[3] for s in sessions if s[6] == YES)
-        for st in students:
-            student_id, name = st[0], st[1]
-            n = charged_by_id.get(student_id, 0)
-            if not n:
-                continue
-            pid += 1
-            payments.append(['P%04d' % pid, today.isoformat(), student_id, name,
-                             '', n, '期初结转',
-                             '汇入旧记录时的结转,视为历史已结清', ''])
+            if paid_count:
+                pid += 1
+                first_paid = min(d for d, _, p in entries if p)
+                payments.append(['P%04d' % pid, first_paid.isoformat(), student_id, name,
+                                 fmt_money(per_lesson * paid_count), paid_count, '旧档结转',
+                                 '旧 Excel 已涂色的 %d 堂,合并成一笔' % paid_count, ''])
 
     def write_csv(fname, headers, rows):
-        path = os.path.join(args.out, fname)
-        with open(path, 'w', newline='', encoding='utf-8-sig') as f:
+        with open(os.path.join(args.out, fname), 'w', newline='', encoding='utf-8-sig') as f:
             w = csv.writer(f)
             w.writerow(headers)
             w.writerows(rows)
-        return path
 
     write_csv('学生.csv', STUDENT_HEADERS, students)
     if sessions:
@@ -239,27 +337,38 @@ def main():
     if payments:
         write_csv('付款记录.csv', PAYMENT_HEADERS, payments)
 
-    report += ['',
-               '─' * 50,
+    # ── 结算表 ──
+    report += ['', '=' * 62,
+               '汇入后每个人的余额(余额 = 已缴堂数 − 已上堂数)',
+               '=' * 62,
+               '%-10s %-12s %5s %5s %6s  %s' % ('班级', '学生', '已缴', '已上', '余额', '状态')]
+    owed = 0
+    for klass, name, paid_count, charged, balance in sorted(balances, key=lambda x: (x[0], x[4])):
+        tag = ('🔴 欠 %d 堂' % -balance if balance < 0 else
+               '🟢 刚好结清' if balance == 0 else '🟡 预缴 %d 堂' % balance)
+        report.append('%-10s %-12s %5d %5d %6d  %s'
+                      % (klass, name, paid_count, charged, balance, tag))
+        if balance < 0:
+            owed += -balance
+    report += ['=' * 62,
+               '合计欠 %d 堂' % owed,
+               '',
                '学生      %d 位' % len(students),
                '课程记录  %d 笔' % len(sessions),
-               '付款记录  %d 笔(期初结转)' % len(payments),
+               '付款记录  %d 笔' % len(payments),
                '',
-               '⚠️ 「期初结转」的用意:历史出席会扣掉堂数,若不补这笔,',
-               '   每个人一汇入就变成欠一大笔而被误判该催费。补上之后,',
-               '   今天的余额一律是 0 —— 也就是「旧账当作已经结清」,',
-               '   从下一堂课开始重新计算。',
+               '⚠️ 上面的「已缴」完全来自旧档的底色。汇入前请先看一眼这张表,',
+               '   数字跟你印象中差太多的话,先确认底色的意思有没有被我猜错。',
                '',
                '⚠️ 旧档只有 1/0,分不出「缺席」和「请假」,一律当成',
                '   「缺席(照算)」。要改的话,汇入后到「课程记录」改那几格,',
                '   余额会自动重算。',
                '',
-               '下一步:把每个 CSV 的内容(不含标题列)贴到对应工作表的 A2,',
+               '下一步:把每个 CSV 汇入对应的工作表(档案 → 汇入 → 在指定储存格取代资料 → A1),',
                '        然后执行 📚 补习管理 → 🔄 刷新总览。',
                '        学生的 WhatsApp 号码和家长称呼旧档没有,要自己补。']
 
-    path = os.path.join(args.out, '汇入报告.txt')
-    with open(path, 'w', encoding='utf-8') as f:
+    with open(os.path.join(args.out, '汇入报告.txt'), 'w', encoding='utf-8') as f:
         f.write('\n'.join(report) + '\n')
 
     print('\n'.join(report))
