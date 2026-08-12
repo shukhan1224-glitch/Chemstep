@@ -17,6 +17,11 @@ function onOpen() {
     .addItem('🔄 刷新总览', 'refreshDashboard')
     .addItem('📱 查看催费草稿', 'showReminderDrafts')
     .addSeparator()
+    .addSubMenu(SpreadsheetApp.getUi().createMenu('💾 备份')
+      .addItem('立刻备份一份', 'backupNowWithAlert')
+      .addItem('开启每周自动备份', 'installWeeklyBackup')
+      .addItem('关闭每周自动备份', 'removeWeeklyBackup'))
+    .addSeparator()
     .addItem('🔧 初始化 / 修复表格', 'setupWorkbook')
     .addItem('❓ 使用说明', 'showHelp')
     .addToUi();
