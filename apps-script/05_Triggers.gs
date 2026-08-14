@@ -118,6 +118,10 @@ function handleStudentEdit_(sh, e) {
   });
 
   if (touchedClass) refreshClassDropdown_(); // 新班级要马上出现在点名的下拉里
+
+  // 改了学生资料(加人、换班、停课、改收费、补 WhatsApp 号码)都会影响总览,
+  // 直接重画,不必记得手动按「刷新总览」
+  refreshDashboard();
 }
 
 /** 付款表:自动编号、带出姓名、盖时间戳 */
