@@ -86,6 +86,103 @@ function loadRollcall() {
 }
 
 /**
+ * 补记某位学生的历史出席。
+ *
+ * 用在「学生其实早就在上课,但忘了先加进系统」的情况:
+ * 依他班上「课程记录」里已经有的上课日,把他缺的那几堂补上去。
+ * 不会动到其他学生,也不会重复补已经有的日期。
+ */
+function backfillStudent() {
+  const ui = SpreadsheetApp.getUi();
+
+  const ask = ui.prompt('补记出席 (1/2)',
+    '要补记哪一位学生?打学生ID(例如 S041)或姓名都可以。',
+    ui.ButtonSet.OK_CANCEL);
+  if (ask.getSelectedButton() !== ui.Button.OK) return;
+  const query = ask.getResponseText().trim();
+  if (!query) return;
+
+  const matches = readTable_(SHEETS.STUDENTS).rows.filter(function (s) {
+    return String(s['学生ID']).trim() === query ||
+           String(s['姓名']).trim().toLowerCase() === query.toLowerCase();
+  });
+  if (!matches.length) { ui.alert('找不到「' + query + '」,请确认学生ID或姓名。'); return; }
+  if (matches.length > 1) {
+    ui.alert('有超过一位叫「' + query + '」的学生,请改用学生ID:\n• ' +
+             matches.map(function (s) { return s['学生ID'] + ' · ' + s['班级']; }).join('\n• '));
+    return;
+  }
+
+  const student = matches[0];
+  const klass = String(student['班级']).trim();
+  if (!klass) { ui.alert(student['姓名'] + ' 还没填班级,请先到「学生」表补上。'); return; }
+
+  // 这个班已经点过名的日子,以及这位学生已经有记录的日子
+  const sessions = readTable_(SHEETS.SESSIONS).rows;
+  const classDates = {};
+  const hasAlready = {};
+  sessions.forEach(function (r) {
+    const key = dateKey_(r['日期']);
+    if (!key) return;
+    if (String(r['班级']).trim() === klass) classDates[key] = r['日期'];
+    if (String(r['学生ID']).trim() === student['学生ID']) hasAlready[key] = true;
+  });
+
+  let dates = Object.keys(classDates).filter(function (k) { return !hasAlready[k]; }).sort();
+  if (!dates.length) {
+    ui.alert(student['姓名'] + ' 在「' + klass + '」已经没有缺漏的上课记录了。');
+    return;
+  }
+
+  const ask2 = ui.prompt('补记出席 (2/2)',
+    student['姓名'] + ' · ' + klass + '\n\n' +
+    '他缺记录的上课日有 ' + dates.length + ' 天:\n' + dates.join('、') + '\n\n' +
+    '要从哪一天开始补?打日期(例如 2026-07-13)。\n' +
+    '整批都要补就留空直接按 OK。',
+    ui.ButtonSet.OK_CANCEL);
+  if (ask2.getSelectedButton() !== ui.Button.OK) return;
+
+  const from = ask2.getResponseText().trim();
+  if (from) {
+    const d = new Date(from);
+    if (isNaN(d.getTime())) { ui.alert('日期看不懂:' + from + '\n请用 2026-07-13 这种格式。'); return; }
+    const fromKey = dateKey_(d);
+    dates = dates.filter(function (k) { return k >= fromKey; });
+    if (!dates.length) { ui.alert(fromKey + ' 之后没有要补的上课日。'); return; }
+  }
+
+  const answer = ui.alert('确定要补记吗?',
+    student['姓名'] + ' · ' + klass + '\n\n' +
+    '会新增 ' + dates.length + ' 笔「出席」记录(都会扣堂):\n• ' + dates.join('\n• ') + '\n\n' +
+    '其中有请假或没上到的,补完再到「课程记录」个别改成免扣。',
+    ui.ButtonSet.YES_NO);
+  if (answer !== ui.Button.YES) return;
+
+  const now = new Date();
+  let seq = parseInt(nextId_(SHEETS.SESSIONS, '记录ID', 'L', 4).substring(1), 10);
+  const rows = dates.map(function (key) {
+    const rec = ['L' + ('000' + seq).slice(-4), classDates[key], klass,
+                 student['学生ID'], student['姓名'],
+                 ATTENDANCE_STATUS.PRESENT, YES, '补记', now, ''];
+    seq++;
+    return rec;
+  });
+
+  const sh = sheet_(SHEETS.SESSIONS);
+  sh.getRange(sh.getLastRow() + 1, 1, rows.length, HEADERS.SESSIONS.length).setValues(rows);
+  logAudit_(SHEETS.SESSIONS, student['学生ID'], '补记历史出席', '',
+            rows.length + ' 笔(' + dates[0] + ' → ' + dates[dates.length - 1] + ')');
+  refreshDashboard();
+
+  const b = computeBalances_()[student['学生ID']] || { balance: 0 };
+  ui.alert('✅ 补记完成',
+    student['姓名'] + ' 补了 ' + rows.length + ' 堂。\n\n' +
+    '目前余额:' + b.balance + ' 堂' +
+    (b.balance <= 0 ? '\n\n🔴 已经该催费了。' : ''),
+    ui.ButtonSet.OK);
+}
+
+/**
  * 撤销某一次点名(整班)。
  * 用「今日点名」的 B1 日期 + D1 班级当条件,把那次的记录整批删掉。
  * 删之前会先列出内容让你确认,删除的事实会写进「修改日志」。
