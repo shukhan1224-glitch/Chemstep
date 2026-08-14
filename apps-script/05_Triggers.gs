@@ -81,8 +81,20 @@ function handleStudentEdit_(sh, e) {
   const cName = colIdx_(sh, '姓名');
   const cStatus = colIdx_(sh, '状态');
   const cClass = colIdx_(sh, '班级');
+  const cFee = colIdx_(sh, '每堂收费RM');
+  const cPkg = colIdx_(sh, '配套堂数');
   const editedCol = e.range.getColumn();
   const touchedClass = editedCol <= cClass && cClass < editedCol + e.range.getNumColumns();
+
+  // 同一班的收费通常一样,新学生留空就照抄同班同学的,免得套到不对的预设值
+  const feeByClass = {};
+  readTable_(SHEETS.STUDENTS).rows.forEach(function (s) {
+    const k = String(s['班级'] == null ? '' : s['班级']).trim();
+    if (!k || feeByClass[k]) return;
+    const fee = Number(s['每堂收费RM']);
+    const pkg = Number(s['配套堂数']);
+    if (fee && pkg) feeByClass[k] = { fee: fee, pkg: pkg };
+  });
 
   editedRows_(e).forEach(function (row) {
     const hasName = String(sh.getRange(row, cName).getValue()).trim() !== '';
@@ -95,6 +107,13 @@ function handleStudentEdit_(sh, e) {
     }
     if (String(sh.getRange(row, cStatus).getValue()).trim() === '') {
       sh.getRange(row, cStatus).setValue(STUDENT_STATUS.ACTIVE);
+    }
+
+    const klass = String(sh.getRange(row, cClass).getValue()).trim();
+    const ref = feeByClass[klass];
+    if (ref) {
+      if (!Number(sh.getRange(row, cFee).getValue())) sh.getRange(row, cFee).setValue(ref.fee);
+      if (!Number(sh.getRange(row, cPkg).getValue())) sh.getRange(row, cPkg).setValue(ref.pkg);
     }
   });
 
