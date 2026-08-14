@@ -8,6 +8,13 @@
 /** 载入某个班级的在读学生到「今日点名」 */
 function loadRollcall() {
   const ui = SpreadsheetApp.getUi();
+
+  // 版本更新后标题列可能还是旧的,先自己修好,避免资料写进去错位
+  if (headersStale_(SHEETS.ROLLCALL, HEADERS.ROLLCALL, 2)) {
+    setupRollcallSheet_(ss_());
+    toast_('点名表的栏位已更新到最新版。');
+  }
+
   const sh = sheet_(SHEETS.ROLLCALL);
   refreshClassDropdown_();
 
@@ -151,6 +158,14 @@ function submitRollcall() {
 
   if (lastRow < 3) {
     ui.alert('点名表是空的。请先执行「载入今日点名」。');
+    return;
+  }
+
+  // 表上的资料若是旧版栏位排出来的,直接提交会存错栏 —— 挡下来要求重载
+  if (headersStale_(SHEETS.ROLLCALL, HEADERS.ROLLCALL, 2)) {
+    ui.alert('点名表的栏位是旧版的',
+             '请先执行「✅ 载入今日点名」重新载入一次(会自动更新栏位),再提交。',
+             ui.ButtonSet.OK);
     return;
   }
 

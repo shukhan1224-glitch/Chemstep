@@ -63,6 +63,27 @@ function getOrCreateSheet_(ss, name) {
   return ss.getSheetByName(name) || ss.insertSheet(name);
 }
 
+/**
+ * 检查工作表的标题列跟程式里的定义是否一致。
+ *
+ * 更新到新版程式码后,如果没有接着执行「初始化 / 修复表格」,
+ * 标题还是旧的、写进去的资料却是新的栏数,整排就会往左错位。
+ * 会用到这个检查的地方会自己修好,不必依赖使用者记得跑哪一步。
+ */
+function headersStale_(sheetName, headers, headerRow) {
+  const sh = ss_().getSheetByName(sheetName);
+  if (!sh) return true;
+  const row = headerRow || 1;
+  if (sh.getLastRow() < row) return true;
+
+  const width = Math.max(sh.getLastColumn(), headers.length);
+  const current = sh.getRange(row, 1, 1, width).getValues()[0];
+  for (let i = 0; i < headers.length; i++) {
+    if (String(current[i] == null ? '' : current[i]).trim() !== headers[i]) return true;
+  }
+  return false;
+}
+
 /** 写入标题列并冻结 */
 function writeHeaders_(sh, headers) {
   sh.getRange(1, 1, 1, headers.length).setValues([headers])

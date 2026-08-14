@@ -50,6 +50,11 @@ function lastReminderMap_() {
 
 /** 重算并重画「总览」 */
 function refreshDashboard() {
+  // 同上:标题列若还是旧版,先修好再画,不然整排会错位
+  if (headersStale_(SHEETS.DASHBOARD, HEADERS.DASHBOARD, 1)) {
+    setupDashboardSheet_(ss_());
+  }
+
   const sh = sheet_(SHEETS.DASHBOARD);
   const settings = getSettings_();
   const balances = computeBalances_();

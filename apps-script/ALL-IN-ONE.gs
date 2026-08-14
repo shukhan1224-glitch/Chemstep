@@ -304,6 +304,27 @@ function getOrCreateSheet_(ss, name) {
   return ss.getSheetByName(name) || ss.insertSheet(name);
 }
 
+/**
+ * 检查工作表的标题列跟程式里的定义是否一致。
+ *
+ * 更新到新版程式码后,如果没有接着执行「初始化 / 修复表格」,
+ * 标题还是旧的、写进去的资料却是新的栏数,整排就会往左错位。
+ * 会用到这个检查的地方会自己修好,不必依赖使用者记得跑哪一步。
+ */
+function headersStale_(sheetName, headers, headerRow) {
+  const sh = ss_().getSheetByName(sheetName);
+  if (!sh) return true;
+  const row = headerRow || 1;
+  if (sh.getLastRow() < row) return true;
+
+  const width = Math.max(sh.getLastColumn(), headers.length);
+  const current = sh.getRange(row, 1, 1, width).getValues()[0];
+  for (let i = 0; i < headers.length; i++) {
+    if (String(current[i] == null ? '' : current[i]).trim() !== headers[i]) return true;
+  }
+  return false;
+}
+
 /** 写入标题列并冻结 */
 function writeHeaders_(sh, headers) {
   sh.getRange(1, 1, 1, headers.length).setValues([headers])
@@ -512,6 +533,13 @@ function objValues_(obj) {
 /** 载入某个班级的在读学生到「今日点名」 */
 function loadRollcall() {
   const ui = SpreadsheetApp.getUi();
+
+  // 版本更新后标题列可能还是旧的,先自己修好,避免资料写进去错位
+  if (headersStale_(SHEETS.ROLLCALL, HEADERS.ROLLCALL, 2)) {
+    setupRollcallSheet_(ss_());
+    toast_('点名表的栏位已更新到最新版。');
+  }
+
   const sh = sheet_(SHEETS.ROLLCALL);
   refreshClassDropdown_();
 
@@ -658,6 +686,14 @@ function submitRollcall() {
     return;
   }
 
+  // 表上的资料若是旧版栏位排出来的,直接提交会存错栏 —— 挡下来要求重载
+  if (headersStale_(SHEETS.ROLLCALL, HEADERS.ROLLCALL, 2)) {
+    ui.alert('点名表的栏位是旧版的',
+             '请先执行「✅ 载入今日点名」重新载入一次(会自动更新栏位),再提交。',
+             ui.ButtonSet.OK);
+    return;
+  }
+
   const rawDate = sh.getRange('B1').getValue();
   if (!rawDate) { ui.alert('请先在 B1 填上课日期。'); return; }
   const date = (rawDate instanceof Date) ? rawDate : new Date(rawDate);
@@ -801,6 +837,11 @@ function lastReminderMap_() {
 
 /** 重算并重画「总览」 */
 function refreshDashboard() {
+  // 同上:标题列若还是旧版,先修好再画,不然整排会错位
+  if (headersStale_(SHEETS.DASHBOARD, HEADERS.DASHBOARD, 1)) {
+    setupDashboardSheet_(ss_());
+  }
+
   const sh = sheet_(SHEETS.DASHBOARD);
   const settings = getSettings_();
   const balances = computeBalances_();
