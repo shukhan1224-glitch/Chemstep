@@ -31,24 +31,41 @@ function onOpen() {
 }
 
 /**
- * 备案:如果重新整理后「📚 补习管理」还是不出现,在 Apps Script 里执行这个函式。
+ * 安装两个「可安装触发器」:
  *
- * onOpen 属于「简单触发器」,某些情况下(公司/学校的 Google Workspace 政策、
- * 浏览器扩充套件、档案是从别人那里复制来的)不会自动执行。
- * 改装成「可安装触发器」就会稳定跑。
+ *  onOpen       —— 简单触发器在某些环境下不会自动跑(公司/学校的 Google
+ *                  Workspace 政策、浏览器扩充套件、档案是复制来的),
+ *                  选单因此不出现。改装成可安装触发器就稳定了。
+ *  onChangeSync —— onEdit 只在「改格子内容」时触发,「删整行 / 插整行」
+ *                  不会。删掉一笔付款或课程记录後总览不会更新,靠这个补上。
  */
 function installOpenTrigger() {
   const ss = ss_();
   ScriptApp.getProjectTriggers().forEach(function (t) {
-    if (t.getHandlerFunction() === 'onOpen') ScriptApp.deleteTrigger(t);
+    const fn = t.getHandlerFunction();
+    if (fn === 'onOpen' || fn === 'onChangeSync') ScriptApp.deleteTrigger(t);
   });
   ScriptApp.newTrigger('onOpen').forSpreadsheet(ss).onOpen().create();
+  ScriptApp.newTrigger('onChangeSync').forSpreadsheet(ss).onChange().create();
 
-  // 顺便立刻建一次,不必等重新整理
+  // 顺便立刻建一次选单,不必等重新整理
   onOpen();
-  Logger.log('✅ 已为「' + ss.getName() + '」安装开启触发器\n' +
+  Logger.log('✅ 已为「' + ss.getName() + '」安装触发器(开启选单 + 删行后自动刷新)\n' +
              '网址:' + ss.getUrl() + '\n' +
              '回试算表重新整理(F5),选单就会出现。');
+}
+
+/** 删行 / 插行之后重算总览。由 installOpenTrigger 装上的可安装触发器呼叫。 */
+function onChangeSync(e) {
+  if (!e || (e.changeType !== 'REMOVE_ROW' && e.changeType !== 'INSERT_ROW')) return;
+  try {
+    // 总览本身是每次重画的,它自己的变动不必再触发一次
+    const name = ss_().getActiveSheet().getName();
+    if (name === SHEETS.DASHBOARD || name === SHEETS.ROLLCALL) return;
+    refreshDashboard();
+  } catch (err) {
+    logAudit_('(onChange)', '', '删行后刷新失败', e.changeType, err.message);
+  }
 }
 
 function onEdit(e) {
